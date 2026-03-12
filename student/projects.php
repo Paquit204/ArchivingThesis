@@ -2,7 +2,7 @@
 session_start();
 include("../config/db.php");
 
- error_reporting(E_ALL);
+error_reporting(E_ALL);
 ini_set('display_errors', 1);
 
 if (!isset($_SESSION["user_id"])) {
@@ -11,7 +11,6 @@ if (!isset($_SESSION["user_id"])) {
 }
 
 $user_id = (int)$_SESSION["user_id"];
-
 
 $roleQuery = "SELECT role_id FROM user_table WHERE user_id = ? LIMIT 1";
 $stmt = $conn->prepare($roleQuery);
@@ -25,7 +24,7 @@ if (!$userData || $userData['role_id'] != 2) {
     exit;
 }
 
- $stmt = $conn->prepare("SELECT first_name, last_name FROM user_table WHERE user_id = ? LIMIT 1");
+$stmt = $conn->prepare("SELECT first_name, last_name FROM user_table WHERE user_id = ? LIMIT 1");
 $stmt->bind_param("i", $user_id);
 $stmt->execute();
 $user = $stmt->get_result()->fetch_assoc();
@@ -34,7 +33,7 @@ $stmt->close();
 $fullName = trim($user["first_name"] . " " . $user["last_name"]);
 $initials = strtoupper(substr($user["first_name"], 0, 1) . substr($user["last_name"], 0, 1));
 
- $student_id = $user_id;
+$student_id = $user_id;
 $studentQuery = "SELECT student_id FROM student_table WHERE user_id = ? LIMIT 1";
 $stmt = $conn->prepare($studentQuery);
 $stmt->bind_param("i", $user_id);
@@ -46,7 +45,7 @@ $stmt->close();
 if ($studentData) {
     $student_id = $studentData['student_id'];
 }
- 
+
 $projects = [];
 
 try {
@@ -80,7 +79,27 @@ try {
     error_log("Projects fetch error: " . $e->getMessage());
 }
 
- function calculateProgress($status, $feedback_count) {
+// =============== GET CERTIFICATES FOR APPROVED THESES ===============
+$certificates = [];
+if (!empty($projects)) {
+    $thesisIds = array_column($projects, 'thesis_id');
+    $placeholders = implode(',', array_fill(0, count($thesisIds), '?'));
+    
+    $certQuery = "SELECT thesis_id, certificate_id, certificate_file, downloaded_count 
+                  FROM certificates 
+                  WHERE thesis_id IN ($placeholders)";
+    $stmt = $conn->prepare($certQuery);
+    $stmt->bind_param(str_repeat('i', count($thesisIds)), ...$thesisIds);
+    $stmt->execute();
+    $certResult = $stmt->get_result();
+    
+    while ($row = $certResult->fetch_assoc()) {
+        $certificates[$row['thesis_id']] = $row;
+    }
+    $stmt->close();
+}
+
+function calculateProgress($status, $feedback_count) {
     switch($status) {
         case 'approved':
             return 100;
@@ -90,12 +109,12 @@ try {
             return 100;
         case 'pending':
         default:
-             $progress = 30 + min($feedback_count * 15, 55);
+            $progress = 30 + min($feedback_count * 15, 55);
             return min($progress, 85);
     }
 }
 
- function getStatusClass($status) {
+function getStatusClass($status) {
     switch($status) {
         case 'approved':
             return 'status-approved';
@@ -109,7 +128,7 @@ try {
     }
 }
 
- function getStatusText($status) {
+function getStatusText($status) {
     switch($status) {
         case 'approved':
             return 'Approved';
@@ -135,7 +154,7 @@ $pageTitle = "My Projects";
   <link rel="stylesheet" href="css/base.css">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
   <style>
-     * {
+    * {
       margin: 0;
       padding: 0;
       box-sizing: border-box;
@@ -576,6 +595,47 @@ $pageTitle = "My Projects";
       transform: translateY(-2px);
     }
 
+    /* =============== NEW CERTIFICATE BUTTON STYLES =============== */
+    .btn-certificate {
+      background: #f59e0b;
+      color: white;
+      padding: 0.6rem 1.2rem;
+      border-radius: 6px;
+      text-decoration: none;
+      font-size: 0.9rem;
+      font-weight: 500;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      transition: all 0.3s;
+      border: none;
+      cursor: pointer;
+    }
+
+    .btn-certificate:hover {
+      background: #d97706;
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(245, 158, 11, 0.3);
+    }
+
+    .certificate-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      background: #f59e0b;
+      color: white;
+      padding: 0.2rem 0.6rem;
+      border-radius: 20px;
+      font-size: 0.7rem;
+      margin-left: 0.5rem;
+    }
+
+    .certificate-stats {
+      font-size: 0.7rem;
+      color: #f59e0b;
+      margin-left: 0.3rem;
+    }
+
     .btn:disabled {
       opacity: 0.5;
       cursor: not-allowed;
@@ -666,7 +726,8 @@ $pageTitle = "My Projects";
         align-items: stretch;
       }
 
-      .project-actions .btn {
+      .project-actions .btn,
+      .project-actions .btn-certificate {
         width: 100%;
         justify-content: center;
       }
@@ -768,6 +829,7 @@ $pageTitle = "My Projects";
           $progress = calculateProgress($project['status'], $project['feedback_count']);
           $statusClass = getStatusClass($project['status']);
           $statusText = getStatusText($project['status']);
+          $hasCertificate = isset($certificates[$project['thesis_id']]);
         ?>
           <div class="project-card">
             <div class="project-header">
@@ -776,6 +838,11 @@ $pageTitle = "My Projects";
                 <?php if ($project['feedback_count'] > 0): ?>
                   <span class="feedback-badge">
                     <i class="fas fa-comment"></i> <?= $project['feedback_count'] ?>
+                  </span>
+                <?php endif; ?>
+                <?php if ($hasCertificate): ?>
+                  <span class="certificate-badge">
+                    <i class="fas fa-certificate"></i> Certified
                   </span>
                 <?php endif; ?>
               </h2>
@@ -798,6 +865,9 @@ $pageTitle = "My Projects";
               <?php if (!empty($project['feedback_count'])): ?>
                 <div><i class="fas fa-comments"></i> <strong>Feedback Received:</strong> <?= $project['feedback_count'] ?></div>
               <?php endif; ?>
+              <?php if ($hasCertificate): ?>
+                <div><i class="fas fa-download"></i> <strong>Certificate Downloaded:</strong> <?= $certificates[$project['thesis_id']]['downloaded_count'] ?> times</div>
+              <?php endif; ?>
             </div>
 
             <div class="project-actions">
@@ -808,6 +878,14 @@ $pageTitle = "My Projects";
               <?php if (!empty($project['file_path'])): ?>
                 <a href="../<?= htmlspecialchars($project['file_path']) ?>" class="btn btn-secondary" download>
                   <i class="fas fa-download"></i> Download Manuscript
+                </a>
+              <?php endif; ?>
+              
+              <?php if ($hasCertificate): ?>
+                <a href="certificate.php?id=<?= $certificates[$project['thesis_id']]['certificate_id'] ?>" 
+                   class="btn-certificate" 
+                   target="_blank">
+                  <i class="fas fa-certificate"></i> View Certificate
                 </a>
               <?php endif; ?>
               

@@ -148,6 +148,7 @@ $successMessage = "";
 $formErrors = [];
 $uploadDir = __DIR__ . "/../uploads/manuscripts/";
 
+// Create upload directory if it doesn't exist
 if (!file_exists($uploadDir)) {
     mkdir($uploadDir, 0777, true);
 }
@@ -194,6 +195,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
             $formErrors[] = "Error uploading file. Please try again.";
         }
         
+        // Validate MIME type
         $finfo = finfo_open(FILEINFO_MIME_TYPE);
         $mimeType = finfo_file($finfo, $fileTmp);
         finfo_close($finfo);
@@ -215,6 +217,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
         if (move_uploaded_file($fileTmp, $uploadPath)) {
             chmod($uploadPath, 0644);
             
+            // Relative path for database (from project root)
             $dbFilePath = 'uploads/manuscripts/' . $newFileName;
             
             /* ================================
@@ -230,6 +233,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                 $student_id = $user_id;
             }
             
+            // Use file_path column para sa manuscript
             $sql = "INSERT INTO thesis_table (student_id, title, abstract, adviser, status, file_path, date_submitted) 
                     VALUES (?, ?, ?, ?, ?, ?, ?)";
             
@@ -243,10 +247,10 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                 if ($stmt->execute()) {
                     $thesisId = $stmt->insert_id;
                     error_log("Thesis inserted successfully with ID: " . $thesisId);
+                    error_log("File saved at: " . $dbFilePath);
 
                     /* ================================
-                       NOTIFY FACULTY - UPDATED VERSION
-                       Based on your notification_table structure
+                       NOTIFY FACULTY
                     ================================ */
                     try {
                         error_log("=== START NOTIFICATION ===");
@@ -319,7 +323,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 // Get recent submissions
 $recentSubmissions = [];
 try {
-    $recentQuery = "SELECT thesis_id, title, status, date_submitted 
+    $recentQuery = "SELECT thesis_id, title, status, date_submitted, file_path 
                    FROM thesis_table 
                    WHERE student_id = ? 
                    ORDER BY date_submitted DESC 
@@ -1080,7 +1084,7 @@ try {
     }
 
     /* ====================================
-       RECENT SUBMISSIONS
+       RECENT SUBMISSIONS WITH FILE INDICATOR
     ==================================== */
     .recent-submissions {
       background: white;
@@ -1149,6 +1153,18 @@ try {
 
     body.dark-mode .submission-info h4 {
       color: #FE4853;
+    }
+
+    .file-indicator {
+      color: #3b82f6;
+      font-size: 0.85rem;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+    }
+
+    .file-indicator i {
+      color: #3b82f6;
     }
 
     .status-badge {
@@ -1582,7 +1598,7 @@ try {
               <input type="file" id="manuscript" name="manuscript" accept=".pdf" required>
               <div class="file-upload-info">
                 <i class="fas fa-info-circle"></i>
-                <span>Accepted format: PDF only | Maximum size: 10MB</span>
+                <span>Accepted format: PDF only | Maximum size: 10MB | File will be saved in uploads/manuscripts/ folder</span>
               </div>
             </div>
           </div>
@@ -1610,6 +1626,11 @@ try {
                 <span class="status-badge status-<?= strtolower($sub['status']) ?>">
                   <?= ucfirst(htmlspecialchars($sub['status'])) ?>
                 </span>
+                <?php if (!empty($sub['file_path'])): ?>
+                  <span class="file-indicator" title="Manuscript uploaded">
+                    <i class="fas fa-file-pdf"></i> PDF
+                  </span>
+                <?php endif; ?>
               </div>
               <small><?= date('M d, Y', strtotime($sub['date_submitted'])) ?></small>
             </div>

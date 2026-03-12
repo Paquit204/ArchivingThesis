@@ -12,8 +12,6 @@ if (!isset($_SESSION["user_id"])) {
 
 $user_id = (int)$_SESSION["user_id"];
 
-error_log("Faculty Dashboard - User ID from session: " . $user_id);
-
 $roleQuery = "SELECT user_id, first_name, last_name, role_id FROM user_table WHERE user_id = ? LIMIT 1";
 $stmt = $conn->prepare($roleQuery);
 $stmt->bind_param("i", $user_id);
@@ -21,10 +19,7 @@ $stmt->execute();
 $userData = $stmt->get_result()->fetch_assoc();
 $stmt->close();
 
-error_log("Faculty Dashboard - User data from DB: " . print_r($userData, true));
-
 if (!$userData) {
-    error_log("Faculty Dashboard - User not found in database, destroying session");
     session_destroy();
     header("Location: ../authentication/login.php?error=user_not_found");
     exit;
@@ -33,8 +28,6 @@ if (!$userData) {
 $required_role_id = 3;
 
 if ($userData['role_id'] != $required_role_id) {
-    error_log("Faculty Dashboard - Access denied. User role_id: " . $userData['role_id'] . ", Required: " . $required_role_id);
-    
     if ($userData['role_id'] == 2) {
         header("Location: /ArchivingThesis/student/student_dashboard.php");
         exit;
@@ -56,7 +49,6 @@ $faculty = $stmt->get_result()->fetch_assoc();
 $stmt->close();
 
 if (!$faculty) {
-    error_log("Faculty Dashboard - Faculty data not found after role verification");
     session_destroy();
     header("Location: ../authentication/login.php?error=invalid_session");
     exit;
@@ -67,12 +59,120 @@ $last  = trim($faculty["last_name"] ?? "");
 $fullName = trim($first . " " . $last);
 $initials = $first && $last ? strtoupper(substr($first, 0, 1) . substr($last, 0, 1)) : "FA";
 
-error_log("Faculty Dashboard - Access granted for: " . $fullName . " (ID: " . $faculty_id . ")");
+// =============== HANDLE FILE DOWNLOAD ===============
+if (isset($_GET['download_manuscript']) && isset($_GET['thesis_id'])) {
+    $download_id = (int)$_GET['thesis_id'];
+    
+    $fileQuery = "SELECT file_path, title FROM thesis_table WHERE thesis_id = ?";
+    $stmt = $conn->prepare($fileQuery);
+    $stmt->bind_param("i", $download_id);
+    $stmt->execute();
+    $fileResult = $stmt->get_result();
+    $fileData = $fileResult->fetch_assoc();
+    $stmt->close();
+    
+    if ($fileData && file_exists('../' . $fileData['file_path'])) {
+        $file = '../' . $fileData['file_path'];
+        $filename = basename($file);
+        
+        header('Content-Type: application/octet-stream');
+        header('Content-Disposition: attachment; filename="' . $filename . '"');
+        header('Content-Length: ' . filesize($file));
+        header('Cache-Control: private, max-age=0, must-revalidate');
+        header('Pragma: public');
+        
+        readfile($file);
+        exit;
+    }
+}
 
+// =============== ORIGINAL COUNTS ===============
+$pendingCount = 0;
+try {
+    $pendingQuery = "SELECT COUNT(*) as total FROM thesis_table WHERE status = 'pending'";
+    $pendingResult = $conn->query($pendingQuery);
+    if ($pendingResult) {
+        $pendingCount = $pendingResult->fetch_assoc()['total'] ?? 0;
+    }
+} catch (Exception $e) {
+    error_log("Faculty Dashboard - Pending count error: " . $e->getMessage());
+}
+
+$approvedCount = 0;
+try {
+    $approvedQuery = "SELECT COUNT(*) as total FROM thesis_table WHERE status = 'approved'";
+    $approvedResult = $conn->query($approvedQuery);
+    if ($approvedResult) {
+        $approvedCount = $approvedResult->fetch_assoc()['total'] ?? 0;
+    }
+} catch (Exception $e) {
+    error_log("Faculty Dashboard - Approved count error: " . $e->getMessage());
+}
+
+$rejectedCount = 0;
+try {
+    $rejectedQuery = "SELECT COUNT(*) as total FROM feedback_table WHERE comments LIKE '%reject%' OR comments LIKE '%wrong%'";
+    $rejectedResult = $conn->query($rejectedQuery);
+    if ($rejectedResult) {
+        $rejectedCount = $rejectedResult->fetch_assoc()['total'] ?? 0;
+    }
+} catch (Exception $e) {
+    error_log("Faculty Dashboard - Rejected count error: " . $e->getMessage());
+}
+
+// =============== GET ALL SUBMISSIONS WITH MANUSCRIPT INFO ===============
+$allSubmissions = [];
+try {
+    $submissionQuery = "SELECT 
+                        t.*, 
+                        u.first_name, 
+                        u.last_name, 
+                        u.email,
+                        s.student_id,
+                        (SELECT COUNT(*) FROM feedback_table f WHERE f.thesis_id = t.thesis_id) as feedback_count,
+                        (SELECT MAX(feedback_date) FROM feedback_table f WHERE f.thesis_id = t.thesis_id) as last_feedback_date
+                        FROM thesis_table t
+                        JOIN user_table u ON t.student_id = u.user_id
+                        JOIN student_table s ON u.user_id = s.user_id
+                        ORDER BY t.date_submitted DESC";
+    
+    $result = $conn->query($submissionQuery);
+    
+    if ($result) {
+        while ($row = $result->fetch_assoc()) {
+            $allSubmissions[] = $row;
+        }
+    }
+} catch (Exception $e) {
+    error_log("Faculty Dashboard - Submissions query error: " . $e->getMessage());
+}
+
+// =============== PENDING THESES FOR REVIEW ===============
+$pendingTheses = [];
+try {
+    $query = "SELECT t.*, u.first_name, u.last_name, u.email 
+              FROM thesis_table t
+              JOIN user_table u ON t.student_id = u.user_id
+              WHERE t.status = 'pending'
+              ORDER BY t.date_submitted DESC 
+              LIMIT 10";
+    $result = $conn->query($query);
+    
+    if ($result) {
+        while ($row = $result->fetch_assoc()) {
+            $pendingTheses[] = $row;
+        }
+    }
+} catch (Exception $e) {
+    error_log("Faculty Dashboard - Thesis query error: " . $e->getMessage());
+}
+
+// =============== NOTIFICATION QUERIES ===============
 $unreadCount = 0;
 $recentNotifications = [];
 
 try {
+    // Get unread count
     $countQuery = "SELECT COUNT(*) as total FROM notification_table 
                    WHERE user_id = ? AND status = 'unread'";
     $stmt = $conn->prepare($countQuery);
@@ -81,6 +181,8 @@ try {
     $countResult = $stmt->get_result()->fetch_assoc();
     $unreadCount = $countResult['total'] ?? 0;
     $stmt->close();
+    
+    // Get recent notifications
     $notifQuery = "SELECT 
                     n.notification_id as id, 
                     n.message,
@@ -112,52 +214,6 @@ try {
     error_log("Faculty Dashboard - Notification error: " . $e->getMessage());
 }
 
-$pendingTheses = [];
-
-try {
-    $query = "SELECT t.*, u.first_name, u.last_name, u.email 
-              FROM thesis_table t
-              JOIN user_table u ON t.student_id = u.user_id
-              WHERE t.status = 'pending'
-              ORDER BY t.date_submitted DESC 
-              LIMIT 10";
-    $result = $conn->query($query);
-    
-    if ($result) {
-        while ($row = $result->fetch_assoc()) {
-            $pendingTheses[] = $row;
-        }
-    } else {
-        error_log("Faculty Dashboard - Error in pending theses query: " . $conn->error);
-    }
-} catch (Exception $e) {
-    error_log("Faculty Dashboard - Thesis query error: " . $e->getMessage());
-}
-
-$pendingCount = count($pendingTheses);
-
-$approvedCount = 0;
-try {
-    $approvedQuery = "SELECT COUNT(*) as total FROM thesis_table WHERE status = 'approved'";
-    $approvedResult = $conn->query($approvedQuery);
-    if ($approvedResult) {
-        $approvedCount = $approvedResult->fetch_assoc()['total'] ?? 0;
-    }
-} catch (Exception $e) {
-    error_log("Faculty Dashboard - Approved count error: " . $e->getMessage());
-}
-
-$rejectedCount = 0;
-try {
-    $rejectedQuery = "SELECT COUNT(*) as total FROM thesis_table WHERE status = 'rejected'";
-    $rejectedResult = $conn->query($rejectedQuery);
-    if ($rejectedResult) {
-        $rejectedCount = $rejectedResult->fetch_assoc()['total'] ?? 0;
-    }
-} catch (Exception $e) {
-    error_log("Faculty Dashboard - Rejected count error: " . $e->getMessage());
-}
-
 $pageTitle = "Faculty Dashboard";
 ?>
 
@@ -169,7 +225,6 @@ $pageTitle = "Faculty Dashboard";
     <title><?= htmlspecialchars($pageTitle) ?> - Theses Archiving System</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     <style>
-     
         * {
             margin: 0;
             padding: 0;
@@ -475,7 +530,6 @@ $pageTitle = "Faculty Dashboard";
             border-top: 1px solid #e9ecef;
         }
 
-        /* Notification Styles */
         .notification-container {
             position: relative;
             display: inline-block;
@@ -574,12 +628,21 @@ $pageTitle = "Faculty Dashboard";
 
         .notification-item.unread {
             background: #fff3f3;
+            border-left: 3px solid #FE4853;
         }
 
         .notif-message {
             font-size: 0.9rem;
             color: #333;
             margin-bottom: 5px;
+            font-weight: 500;
+        }
+
+        .notif-thesis {
+            font-size: 0.8rem;
+            color: #FE4853;
+            margin-top: 3px;
+            font-style: italic;
         }
 
         .notif-time {
@@ -605,7 +668,7 @@ $pageTitle = "Faculty Dashboard";
             font-size: 0.9rem;
             font-weight: 500;
         }
- 
+
         .welcome-banner {
             background: linear-gradient(135deg, #FE4853 0%, #732529 100%);
             color: white;
@@ -626,10 +689,10 @@ $pageTitle = "Faculty Dashboard";
             opacity: 0.9;
             font-size: 1rem;
         }
- 
+
         .stats-overview {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            grid-template-columns: repeat(3, 1fr);
             gap: 1.5rem;
             margin-bottom: 2rem;
         }
@@ -671,7 +734,7 @@ $pageTitle = "Faculty Dashboard";
             font-size: 0.95rem;
             font-weight: 500;
         }
- 
+
         .pending-theses {
             background: white;
             border-radius: 12px;
@@ -744,51 +807,7 @@ $pageTitle = "Faculty Dashboard";
         .btn-review:hover {
             background: #000000;
         }
-        .recent-activity {
-            background: white;
-            border-radius: 12px;
-            padding: 1.5rem;
-            box-shadow: 0 3px 14px rgba(110, 110, 110, 0.1);
-        }
-        .recent-activity h3 {
-            color: #000000;
-            margin: 0 0 1.5rem 0;
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            font-size: 1.3rem;
-        }
-        .activity-list {
-            display: flex;
-            flex-direction: column;
-            gap: 0.75rem;
-        }
-        .activity-item {
-            display: flex;
-            align-items: flex-start;
-            gap: 1rem;
-            padding: 1rem;
-            background: #f8fafc;
-            border-radius: 8px;
-            transition: transform 0.2s;
-        }
-        .activity-item:hover {
-            transform: translateX(5px);
-        }
-        .activity-icon {
-            font-size: 1.2rem;
-            color: #FE4853;
-            margin-top: 0.2rem;
-        }
-        .activity-content p {
-            margin: 0 0 0.3rem 0;
-            color: #333;
-            font-size: 0.95rem;
-        }
-        .activity-time {
-            font-size: 0.8rem;
-            color: #6E6E6E;
-        }
+
         .badge {
             background: #FE4853;
             color: white;
@@ -798,6 +817,7 @@ $pageTitle = "Faculty Dashboard";
             border-radius: 10px;
             margin-left: 8px;
         }
+
         .mobile-menu-btn {
             position: fixed;
             top: 16px;
@@ -814,11 +834,332 @@ $pageTitle = "Faculty Dashboard";
             box-shadow: 0 4px 12px rgba(254, 72, 83, 0.3);
             border: 1px solid white;
         }
+
+        /* =============== SUBMISSIONS SECTION =============== */
+        .submissions-section {
+            background: white;
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-top: 2rem;
+            box-shadow: 0 3px 14px rgba(110, 110, 110, 0.1);
+        }
+
+        .submissions-section h3 {
+            color: #000000;
+            margin-bottom: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        body.dark-mode .submissions-section h3 {
+            color: #FE4853;
+        }
+
+        .submission-tabs {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1.5rem;
+            border-bottom: 2px solid #e0e0e0;
+            padding-bottom: 0.5rem;
+            flex-wrap: wrap;
+        }
+
+        .tab-btn {
+            padding: 0.5rem 1rem;
+            background: none;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            color: #6E6E6E;
+            transition: all 0.2s;
+        }
+
+        .tab-btn:hover {
+            background: #f0f0f0;
+            color: #FE4853;
+        }
+
+        .tab-btn.active {
+            background: #FE4853;
+            color: white;
+        }
+
+        .submissions-list {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .submission-item {
+            padding: 1.2rem;
+            background: #f8fafc;
+            border-radius: 8px;
+            border-left: 4px solid #6E6E6E;
+            transition: transform 0.2s;
+        }
+
+        .submission-item:hover {
+            transform: translateX(5px);
+        }
+
+        body.dark-mode .submission-item {
+            background: #4a4a4a;
+        }
+
+        .submission-item.status-pending {
+            border-left-color: #f59e0b;
+        }
+
+        .submission-item.status-approved {
+            border-left-color: #10b981;
+        }
+
+        .submission-item.status-rejected {
+            border-left-color: #ef4444;
+        }
+
+        .submission-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.8rem;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+
+        .submission-header h4 {
+            margin: 0;
+            font-size: 1.1rem;
+            color: #333;
+        }
+
+        body.dark-mode .submission-header h4 {
+            color: #e0e0e0;
+        }
+
+        .submission-header h4 i {
+            color: #FE4853;
+            margin-right: 0.5rem;
+        }
+
+        .status-badge {
+            padding: 0.3rem 0.8rem;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 500;
+        }
+
+        .status-badge.status-pending {
+            background: #fef3c7;
+            color: #f59e0b;
+        }
+
+        .status-badge.status-approved {
+            background: #d1fae5;
+            color: #10b981;
+        }
+
+        .status-badge.status-rejected {
+            background: #fee2e2;
+            color: #ef4444;
+        }
+
+        .submission-details {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .submission-details p {
+            margin: 0;
+            font-size: 0.9rem;
+            color: #6E6E6E;
+        }
+
+        body.dark-mode .submission-details p {
+            color: #b0b0b0;
+        }
+
+        .submission-details p i {
+            color: #FE4853;
+            margin-right: 0.3rem;
+            width: 16px;
+        }
+
+        /* =============== MINIMALIST MANUSCRIPT ACTIONS =============== */
+        .submission-actions {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+            align-items: center;
+            margin-top: 0.5rem;
+            padding-top: 0.5rem;
+            border-top: 1px solid #e0e0e0;
+        }
+
+        body.dark-mode .submission-actions {
+            border-top-color: #6E6E6E;
+        }
+
+        .file-info {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: #333;
+            font-size: 0.9rem;
+        }
+
+        body.dark-mode .file-info {
+            color: #e0e0e0;
+        }
+
+        .file-info i {
+            color: #FE4853;
+        }
+
+        .file-actions {
+            display: flex;
+            gap: 0.75rem;
+            margin-left: auto;
+        }
+
+        .file-actions a {
+            color: #3b82f6;
+            text-decoration: none;
+            font-size: 0.85rem;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+            transition: color 0.2s;
+        }
+
+        .file-actions a:hover {
+            color: #2563eb;
+            text-decoration: underline;
+        }
+
+        .file-actions a.download {
+            color: #10b981;
+        }
+
+        .file-actions a.download:hover {
+            color: #059669;
+        }
+
+        .file-missing {
+            color: #ef4444;
+            font-size: 0.85rem;
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+        }
+
+        .no-file {
+            color: #6E6E6E;
+            font-size: 0.85rem;
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+        }
+
+        .btn-review-small {
+            padding: 0.25rem 0.75rem;
+            background: #FE4853;
+            color: white;
+            border-radius: 4px;
+            text-decoration: none;
+            font-size: 0.8rem;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+            margin-left: auto;
+        }
+
+        .btn-review-small:hover {
+            background: #d13b45;
+        }
+
+        .no-submissions {
+            text-align: center;
+            padding: 3rem;
+            color: #6E6E6E;
+        }
+
+        .no-submissions i {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+            color: #FE4853;
+        }
+
+        /* Modal for PDF viewer */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 2000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.8);
+        }
+
+        .modal-content {
+            position: relative;
+            margin: 2% auto;
+            width: 90%;
+            height: 90%;
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1rem;
+            background: #f8fafc;
+            border-bottom: 1px solid #e0e0e0;
+        }
+
+        .modal-header h2 {
+            margin: 0;
+            font-size: 1.2rem;
+            color: #333;
+        }
+
+        .close-modal {
+            background: none;
+            border: none;
+            font-size: 1.5rem;
+            cursor: pointer;
+            color: #6E6E6E;
+        }
+
+        .close-modal:hover {
+            color: #FE4853;
+        }
+
+        .modal-body {
+            height: calc(100% - 70px);
+            padding: 1rem;
+        }
+
+        .pdf-frame {
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
+
         @keyframes pulse {
             0% { transform: scale(1); }
             50% { transform: scale(1.1); }
             100% { transform: scale(1); }
         }
+
         @keyframes slideDown {
             from {
                 opacity: 0;
@@ -829,6 +1170,7 @@ $pageTitle = "Faculty Dashboard";
                 transform: translateY(0);
             }
         }
+
         @keyframes fadeIn {
             from {
                 opacity: 0;
@@ -839,6 +1181,7 @@ $pageTitle = "Faculty Dashboard";
                 transform: translateY(0);
             }
         }
+
         @media (max-width: 768px) {
             .sidebar {
                 transform: translateX(-100%);
@@ -881,10 +1224,24 @@ $pageTitle = "Faculty Dashboard";
                 width: 100%;
                 justify-content: center;
             }
-
             .notification-dropdown {
                 width: 300px;
                 right: -50px;
+            }
+            .submission-header {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+            .submission-actions {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 0.5rem;
+            }
+            .file-actions {
+                margin-left: 0;
+            }
+            .btn-review-small {
+                margin-left: 0;
             }
         }
     </style>
@@ -912,6 +1269,12 @@ $pageTitle = "Faculty Dashboard";
         </a>
         <a href="facultyFeedback.php" class="nav-link">
             <i class="fas fa-comment-dots"></i> My Feedback
+        </a>
+        <a href="notification.php" class="nav-link">
+            <i class="fas fa-bell"></i> Notifications
+            <?php if ($unreadCount > 0): ?>
+                <span class="badge"><?= $unreadCount ?></span>
+            <?php endif; ?>
         </a>
         <a href="#" class="nav-link">
             <i class="fas fa-calendar-check"></i> Schedule
@@ -963,24 +1326,29 @@ $pageTitle = "Faculty Dashboard";
                         <div class="notification-list">
                             <?php if (empty($recentNotifications)): ?>
                                 <div class="notification-item">
-                                    <div class="no-notifications">No new thesis submissions</div>
+                                    <div class="no-notifications">No new notifications</div>
                                 </div>
                             <?php else: ?>
                                 <?php foreach ($recentNotifications as $notif): ?>
-                                    <div class="notification-item <?= isset($notif['is_read']) && $notif['is_read'] == 0 ? 'unread' : '' ?>"
+                                    <div class="notification-item <?= $notif['status'] == 'unread' ? 'unread' : '' ?>"
                                          data-notification-id="<?= $notif['id'] ?? '' ?>"
-                                         data-thesis-id="<?= $notif['thesis_id'] ?? '' ?>"
-                                         onclick="markAsReadAndRedirect(this, <?= $notif['thesis_id'] ?? 0 ?>)">
+                                         data-thesis-id="<?= $notif['thesis_id'] ?? 0 ?>"
+                                         onclick="markAsReadAndRedirect(this)">
                                         <div class="notif-message">
                                             <?= htmlspecialchars($notif['message'] ?? '') ?>
                                         </div>
+                                        <?php if (!empty($notif['thesis_title'])): ?>
+                                            <div class="notif-thesis">
+                                                <i class="fas fa-book"></i> <?= htmlspecialchars($notif['thesis_title']) ?>
+                                            </div>
+                                        <?php endif; ?>
                                         <div class="notif-time"><?= date('M d, h:i A', strtotime($notif['created_at'])) ?></div>
                                     </div>
                                 <?php endforeach; ?>
                             <?php endif; ?>
                         </div>
                         <div class="notification-footer">
-                            <a href="notifications.php">View all notifications</a>
+                            <a href="notification.php">View all notifications</a>
                         </div>
                     </div>
                 </div>
@@ -1062,39 +1430,121 @@ $pageTitle = "Faculty Dashboard";
         </div>
         <?php endif; ?>
 
-        <div class="recent-activity">
-            <h3><i class="fas fa-history"></i> Recent Activity</h3>
-            <div class="activity-list">
-                <?php 
-                $activityShown = 0;
-                foreach ($recentNotifications as $notif): 
-                    if ($activityShown >= 5) break;
-                    $activityShown++;
-                ?>
-                <div class="activity-item">
-                    <i class="fas fa-file-upload activity-icon"></i>
-                    <div class="activity-content">
-                        <p><?= htmlspecialchars($notif['message']) ?></p>
-                        <span class="activity-time"><?= date('M d, h:i A', strtotime($notif['created_at'])) ?></span>
+        <!-- =============== ALL THESIS SUBMISSIONS =============== -->
+        <div class="submissions-section">
+            <h3><i class="fas fa-file-alt"></i> All Thesis Submissions</h3>
+            
+            <div class="submission-tabs">
+                <button class="tab-btn active" onclick="filterSubmissions('all')">All (<?= count($allSubmissions) ?>)</button>
+                <button class="tab-btn" onclick="filterSubmissions('pending')">Pending (<?= count(array_filter($allSubmissions, function($s) { return $s['status'] == 'pending'; })) ?>)</button>
+                <button class="tab-btn" onclick="filterSubmissions('approved')">Approved (<?= count(array_filter($allSubmissions, function($s) { return $s['status'] == 'approved'; })) ?>)</button>
+                <button class="tab-btn" onclick="filterSubmissions('rejected')">Rejected (<?= count(array_filter($allSubmissions, function($s) { return $s['status'] == 'rejected'; })) ?>)</button>
+            </div>
+            
+            <div class="submissions-list" id="submissionsList">
+                <?php if (empty($allSubmissions)): ?>
+                    <div class="no-submissions">
+                        <i class="fas fa-folder-open"></i>
+                        <p>No thesis submissions yet.</p>
                     </div>
-                </div>
-                <?php endforeach; ?>
-                
-                <?php if ($activityShown == 0): ?>
-                <div class="activity-item">
-                    <i class="fas fa-info-circle activity-icon"></i>
-                    <div class="activity-content">
-                        <p>No recent activity</p>
-                    </div>
-                </div>
+                <?php else: ?>
+                    <?php foreach ($allSubmissions as $submission): ?>
+                        <div class="submission-item status-<?= $submission['status'] ?>" data-status="<?= $submission['status'] ?>">
+                            <div class="submission-header">
+                                <h4>
+                                    <i class="fas fa-file-pdf"></i> 
+                                    <?= htmlspecialchars($submission['title']) ?>
+                                </h4>
+                                <span class="status-badge status-<?= $submission['status'] ?>">
+                                    <?= ucfirst($submission['status']) ?>
+                                </span>
+                            </div>
+                            
+                            <div class="submission-details">
+                                <p>
+                                    <i class="fas fa-user"></i> 
+                                    <strong>Student:</strong> <?= htmlspecialchars($submission['first_name'] . ' ' . $submission['last_name']) ?>
+                                </p>
+                                <p>
+                                    <i class="fas fa-calendar"></i> 
+                                    <strong>Submitted:</strong> <?= date('F d, Y', strtotime($submission['date_submitted'])) ?>
+                                </p>
+                                <p>
+                                    <i class="fas fa-comments"></i> 
+                                    <strong>Feedback:</strong> <?= $submission['feedback_count'] ?> feedback(s)
+                                </p>
+                                <?php if ($submission['last_feedback_date']): ?>
+                                <p>
+                                    <i class="fas fa-clock"></i> 
+                                    <strong>Last Feedback:</strong> <?= date('M d, Y', strtotime($submission['last_feedback_date'])) ?>
+                                </p>
+                                <?php endif; ?>
+                            </div>
+                            
+                            <div class="submission-actions">
+                                <?php if (!empty($submission['file_path'])): ?>
+                                    <?php 
+                                    $full_path = '../' . $submission['file_path'];
+                                    $file_exists = file_exists($full_path);
+                                    $file_name = basename($submission['file_path']);
+                                    ?>
+                                    
+                                    <?php if ($file_exists): ?>
+                                        <div class="file-info">
+                                            <i class="fas fa-file-pdf"></i>
+                                            <span><?= htmlspecialchars($file_name) ?></span>
+                                        </div>
+                                        <div class="file-actions">
+                                            <a href="<?= htmlspecialchars($full_path) ?>" target="_blank">
+                                                <i class="fas fa-eye"></i> View
+                                            </a>
+                                            <a href="?download_manuscript=1&thesis_id=<?= $submission['thesis_id'] ?>" class="download">
+                                                <i class="fas fa-download"></i> Download
+                                            </a>
+                                        </div>
+                                    <?php else: ?>
+                                        <div class="file-missing">
+                                            <i class="fas fa-exclamation-circle"></i>
+                                            <span>File "<?= htmlspecialchars($file_name) ?>" not found</span>
+                                        </div>
+                                    <?php endif; ?>
+                                <?php else: ?>
+                                    <div class="no-file">
+                                        <i class="fas fa-file-pdf"></i>
+                                        <span>No manuscript uploaded</span>
+                                    </div>
+                                <?php endif; ?>
+                                
+                                <?php if ($submission['status'] == 'pending'): ?>
+                                    <a href="reviewThesis.php?id=<?= $submission['thesis_id'] ?>" class="btn-review-small">
+                                        <i class="fas fa-check-circle"></i> Review
+                                    </a>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+                    <?php endforeach; ?>
                 <?php endif; ?>
             </div>
         </div>
     </main>
 </div>
 
+<!-- Modal for PDF viewer -->
+<div id="pdfModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2 id="modalTitle">Viewing Manuscript</h2>
+            <button class="close-modal" onclick="closePDFModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <iframe id="pdfFrame" class="pdf-frame" src=""></iframe>
+        </div>
+    </div>
+</div>
+
 <script>
-   const toggle = document.getElementById('darkmode');
+    // =============== DARK MODE TOGGLE ===============
+    const toggle = document.getElementById('darkmode');
     if (toggle) {
         toggle.addEventListener('change', () => {
             document.body.classList.toggle('dark-mode');
@@ -1105,6 +1555,8 @@ $pageTitle = "Faculty Dashboard";
             document.body.classList.add('dark-mode');
         }
     }
+
+    // =============== AVATAR DROPDOWN ===============
     const avatarBtn = document.getElementById('avatarBtn');
     const dropdownMenu = document.getElementById('dropdownMenu');
     const notificationBell = document.getElementById('notificationBell');
@@ -1118,6 +1570,7 @@ $pageTitle = "Faculty Dashboard";
         });
     }
 
+    // =============== NOTIFICATION DROPDOWN ===============
     if (notificationBell) {
         notificationBell.addEventListener('click', function(e) {
             e.stopPropagation();
@@ -1126,6 +1579,7 @@ $pageTitle = "Faculty Dashboard";
         });
     }
 
+    // =============== CLOSE DROPDOWNS ===============
     window.addEventListener('click', function() {
         if (notificationDropdown) notificationDropdown.classList.remove('show');
         if (dropdownMenu) dropdownMenu.classList.remove('show');
@@ -1142,77 +1596,114 @@ $pageTitle = "Faculty Dashboard";
             e.stopPropagation();
         });
     }
- 
-    document.getElementById('markAllRead')?.addEventListener('click', function(e) {
-        e.preventDefault();
+
+    // =============== UPDATED NOTIFICATION FUNCTION WITH AJAX ===============
+    function markAsReadAndRedirect(element) {
+        var notificationId = element.getAttribute('data-notification-id');
+        var thesisId = element.getAttribute('data-thesis-id');
         
-        fetch('mark_all_read.php', {
+        console.log('Clicked - ID:', notificationId, 'Thesis:', thesisId);
+        
+        if (!notificationId) {
+            console.error('No notification ID');
+            return;
+        }
+        
+        // Show loading state
+        element.style.opacity = '0.5';
+        element.style.pointerEvents = 'none';
+        
+        // AJAX request to mark as read
+        fetch('notification_handler.php', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ 
+                action: 'mark_read',
+                notification_id: notificationId 
+            })
+        })
+        .then(response => {
+            console.log('Response status:', response.status);
+            return response.json();
+        })
+        .then(data => {
+            console.log('Response data:', data);
+            
+            if (data.success) {
+                // Remove unread class
+                element.classList.remove('unread');
+                
+                // Update badge count
+                const badge = document.querySelector('.notification-badge');
+                if (badge) {
+                    let currentCount = parseInt(badge.textContent);
+                    if (currentCount > 1) {
+                        badge.textContent = currentCount - 1;
+                        console.log('New badge count:', currentCount - 1);
+                    } else {
+                        badge.remove();
+                        console.log('Badge removed');
+                    }
+                }
+                
+                // Redirect to review page
+                if (thesisId && thesisId > 0 && thesisId != '0') {
+                    window.location.href = 'reviewThesis.php?id=' + thesisId;
+                } else {
+                    // If no thesis ID, just reload to show updated notification list
+                    location.reload();
+                }
+            } else {
+                console.error('Server error:', data.error);
+                element.style.opacity = '1';
+                element.style.pointerEvents = 'auto';
+                alert('Error: ' + (data.error || 'Unknown error'));
             }
+        })
+        .catch(error => {
+            console.error('Fetch error:', error);
+            element.style.opacity = '1';
+            element.style.pointerEvents = 'auto';
+            alert('Network error: ' + error.message);
+        });
+    }
+
+    // =============== MARK ALL AS READ ===============
+    document.getElementById('markAllRead')?.addEventListener('click', function(e) {
+        e.preventDefault();
+        
+        console.log('Mark all as read clicked');
+        
+        fetch('notification_handler.php', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ action: 'mark_all_read' })
         })
         .then(response => response.json())
         .then(data => {
+            console.log('Mark all response:', data);
+            
             if (data.success) {
+                // Remove unread class from all notifications
                 document.querySelectorAll('.notification-item').forEach(item => {
                     item.classList.remove('unread');
                 });
                 
+                // Remove badge
                 const badge = document.querySelector('.notification-badge');
-                if (badge) badge.remove();
-                
-                const notifStat = document.querySelector('.stat-card:last-child .stat-value');
-                if (notifStat) notifStat.textContent = '0';
+                if (badge) {
+                    badge.remove();
+                }
             }
         })
         .catch(error => console.error('Error:', error));
     });
 
-    function markAsReadAndRedirect(element, thesisId) {
-        var notificationId = element.getAttribute('data-notification-id');
-        
-        if (!notificationId) {
-            console.error('Notification ID not found');
-            return;
-        }
-        
-        fetch('mark_notification_read.php', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ notification_id: notificationId })
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                element.classList.remove('unread');
-                
-                const badge = document.querySelector('.notification-badge');
-                const notifStat = document.querySelector('.stat-card:last-child .stat-value');
-                
-                if (badge) {
-                    let currentCount = parseInt(badge.textContent);
-                    if (currentCount > 1) {
-                        badge.textContent = currentCount - 1;
-                        if (notifStat) notifStat.textContent = currentCount - 1;
-                    } else {
-                        badge.remove();
-                        if (notifStat) notifStat.textContent = '0';
-                    }
-                }
-                
-                if (thesisId && thesisId > 0) {
-                    window.location.href = 'reviewThesis.php?id=' + thesisId;
-                }
-            } else {
-                console.error('Failed to mark as read:', data.error);
-            }
-        })
-        .catch(error => console.error('Error:', error));
-    }
- 
+    // =============== MOBILE MENU ===============
     const mobileBtn = document.getElementById('mobileMenuBtn');
     const sidebar = document.getElementById('sidebar');
     const overlay = document.getElementById('overlay');
@@ -1268,27 +1759,41 @@ $pageTitle = "Faculty Dashboard";
         });
     }
 
-    const navLinks = document.querySelectorAll('.nav-link');
-    navLinks.forEach(link => {
-        link.addEventListener('click', function() {
-            if (window.innerWidth <= 768) {
-                sidebar.classList.remove('show');
-                overlay.classList.remove('show');
-                
-                const mobileIcon = mobileBtn?.querySelector('i');
-                const hamburgerIcon = hamburgerBtn?.querySelector('i');
-                
-                if (mobileIcon) {
-                    mobileIcon.classList.remove('fa-times');
-                    mobileIcon.classList.add('fa-bars');
-                }
-                if (hamburgerIcon) {
-                    hamburgerIcon.classList.remove('fa-times');
-                    hamburgerIcon.classList.add('fa-bars');
-                }
+    // =============== FILTER SUBMISSIONS ===============
+    function filterSubmissions(status) {
+        document.querySelectorAll('.tab-btn').forEach(btn => {
+            btn.classList.remove('active');
+        });
+        event.target.classList.add('active');
+        
+        const submissions = document.querySelectorAll('.submission-item');
+        submissions.forEach(item => {
+            if (status === 'all' || item.dataset.status === status) {
+                item.style.display = 'block';
+            } else {
+                item.style.display = 'none';
             }
         });
-    });
+    }
+
+    // =============== PDF VIEWER ===============
+    function viewManuscript(filePath, title) {
+        document.getElementById('modalTitle').textContent = 'Viewing: ' + title;
+        document.getElementById('pdfFrame').src = filePath;
+        document.getElementById('pdfModal').style.display = 'block';
+    }
+
+    function closePDFModal() {
+        document.getElementById('pdfModal').style.display = 'none';
+        document.getElementById('pdfFrame').src = '';
+    }
+
+    window.onclick = function(event) {
+        const modal = document.getElementById('pdfModal');
+        if (event.target == modal) {
+            closePDFModal();
+        }
+    }
 </script>
 
 </body>

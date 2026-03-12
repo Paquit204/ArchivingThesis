@@ -119,7 +119,230 @@ if (isset($_POST['action'])) {
                 $stmt->close();
             }
             
-            // ✅ SINGLE NOTIFICATION - combine status and feedback (FIXED)
+            // =============== GENERATE CERTIFICATE IF APPROVED ===============
+            if ($action == 'approve') {
+                // Create certificates directory if not exists
+                $certDir = __DIR__ . "/../uploads/certificates/";
+                if (!file_exists($certDir)) {
+                    mkdir($certDir, 0777, true);
+                }
+                
+                // Generate unique filename
+                $certFileName = 'certificate_' . $thesis_id . '_' . time() . '.html';
+                $certPath = $certDir . $certFileName;
+                
+                // Get student name and thesis title
+                $studentName = $thesis['first_name'] . ' ' . $thesis['last_name'];
+                $thesisTitle = $thesis['title'];
+                $facultyName = $first . ' ' . $last;
+                
+                // Create HTML certificate
+                $certificateHTML = '
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <meta charset="UTF-8">
+                    <title>Thesis Certificate</title>
+                    <style>
+                        body {
+                            font-family: "Times New Roman", Times, serif;
+                            background: #f0f0f0;
+                            margin: 0;
+                            padding: 20px;
+                            display: flex;
+                            justify-content: center;
+                            align-items: center;
+                            min-height: 100vh;
+                        }
+                        .certificate {
+                            width: 800px;
+                            background: white;
+                            border: 20px solid #FE4853;
+                            padding: 40px;
+                            position: relative;
+                            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+                        }
+                        .certificate:before {
+                            content: "";
+                            position: absolute;
+                            top: 10px;
+                            left: 10px;
+                            right: 10px;
+                            bottom: 10px;
+                            border: 2px solid #732529;
+                            pointer-events: none;
+                        }
+                        .header {
+                            text-align: center;
+                            margin-bottom: 40px;
+                        }
+                        .header h1 {
+                            color: #FE4853;
+                            font-size: 48px;
+                            margin: 0;
+                            text-transform: uppercase;
+                            letter-spacing: 5px;
+                        }
+                        .header h2 {
+                            color: #732529;
+                            font-size: 24px;
+                            margin: 10px 0 0;
+                            font-style: italic;
+                        }
+                        .content {
+                            text-align: center;
+                            margin: 50px 0;
+                        }
+                        .content p {
+                            font-size: 18px;
+                            color: #333;
+                            line-height: 2;
+                        }
+                        .student-name {
+                            font-size: 36px;
+                            color: #FE4853;
+                            font-weight: bold;
+                            margin: 20px 0;
+                            text-transform: uppercase;
+                            border-bottom: 2px solid #732529;
+                            display: inline-block;
+                            padding-bottom: 10px;
+                        }
+                        .thesis-title {
+                            font-size: 24px;
+                            color: #732529;
+                            font-style: italic;
+                            margin: 20px 0;
+                        }
+                        .date {
+                            font-size: 18px;
+                            color: #666;
+                            margin: 30px 0;
+                        }
+                        .signature {
+                            margin-top: 60px;
+                            display: flex;
+                            justify-content: space-between;
+                        }
+                        .signature-line {
+                            width: 200px;
+                            border-top: 2px solid #333;
+                            margin-top: 40px;
+                        }
+                        .signature-item {
+                            text-align: center;
+                        }
+                        .signature-item p {
+                            margin: 5px 0;
+                            color: #666;
+                        }
+                        .seal {
+                            position: absolute;
+                            bottom: 50px;
+                            right: 50px;
+                            width: 100px;
+                            height: 100px;
+                            border: 3px solid #FE4853;
+                            border-radius: 50%;
+                            display: flex;
+                            align-items: center;
+                            justify-content: center;
+                            transform: rotate(-15deg);
+                        }
+                        .seal p {
+                            color: #FE4853;
+                            font-size: 14px;
+                            font-weight: bold;
+                            text-align: center;
+                            line-height: 1.4;
+                        }
+                        .footer {
+                            text-align: center;
+                            margin-top: 40px;
+                            color: #999;
+                            font-size: 12px;
+                        }
+                    </style>
+                </head>
+                <body>
+                    <div class="certificate">
+                        <div class="header">
+                            <h1>Certificate of Approval</h1>
+                            <h2>Thesis Archiving System</h2>
+                        </div>
+                        
+                        <div class="content">
+                            <p>This is to certify that</p>
+                            <div class="student-name">' . $studentName . '</div>
+                            <p>has successfully completed and defended the thesis entitled</p>
+                            <div class="thesis-title">"' . $thesisTitle . '"</div>
+                            <p>on this day, <strong>' . date('F d, Y') . '</strong></p>
+                            <p>and is hereby granted the approval for thesis submission.</p>
+                        </div>
+                        
+                        <div class="signature">
+                            <div class="signature-item">
+                                <div class="signature-line"></div>
+                                <p><strong>' . $facultyName . '</strong></p>
+                                <p>Thesis Adviser</p>
+                            </div>
+                            <div class="signature-item">
+                                <div class="signature-line"></div>
+                                <p><strong>Dean</strong></p>
+                                <p>Graduate School</p>
+                            </div>
+                        </div>
+                        
+                        <div class="seal">
+                            <p>OFFICIAL<br>SEAL</p>
+                        </div>
+                        
+                        <div class="footer">
+                            <p>This certificate is automatically generated by Theses Archiving System</p>
+                            <p>Certificate ID: CERT-' . str_pad($thesis_id, 6, '0', STR_PAD_LEFT) . '</p>
+                        </div>
+                    </div>
+                </body>
+                </html>';
+                
+                // Save certificate file
+                file_put_contents($certPath, $certificateHTML);
+                
+                // Check if certificates_table exists, if not, create it
+                $checkTableQuery = "SHOW TABLES LIKE 'certificates_table'";
+                $tableExists = $conn->query($checkTableQuery);
+                
+                if ($tableExists->num_rows == 0) {
+                    // Create certificates table if it doesn't exist
+                    $createTableQuery = "CREATE TABLE certificates_table (
+                        certificate_id INT(11) NOT NULL AUTO_INCREMENT,
+                        thesis_id INT(11) NOT NULL,
+                        student_id INT(11) NOT NULL,
+                        certificate_file VARCHAR(255) NOT NULL,
+                        generated_date DATETIME NOT NULL,
+                        downloaded_count INT(11) DEFAULT 0,
+                        PRIMARY KEY (certificate_id),
+                        KEY thesis_id (thesis_id),
+                        KEY student_id (student_id)
+                    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4";
+                    $conn->query($createTableQuery);
+                }
+                
+                // Insert record to certificates_table
+                $certQuery = "INSERT INTO certificates_table (thesis_id, student_id, certificate_file, generated_date, downloaded_count) 
+                              VALUES (?, ?, ?, NOW(), 0)";
+                $certStmt = $conn->prepare($certQuery);
+                $certStmt->bind_param("iis", $thesis_id, $thesis['user_id'], $certFileName);
+                $certStmt->execute();
+                $certStmt->close();
+                
+                // Add certificate notification to message
+                $certMessage = " Certificate has been generated.";
+            }
+            
+            // =============== NOTIFICATION SENDING (IMPROVED WITH ERROR CHECKING) ===============
+            
+            // Prepare notification message
             if (!empty($feedback)) {
                 // Truncate feedback if too long
                 $shortFeedback = strlen($feedback) > 50 ? substr($feedback, 0, 50) . "..." : $feedback;
@@ -128,16 +351,32 @@ if (isset($_POST['action'])) {
                 $notifMessage = "Your thesis '" . $thesis['title'] . "' has been " . $status . " by faculty.";
             }
             
+            // Add certificate mention if approved
+            if ($action == 'approve') {
+                $notifMessage .= " A certificate has been generated for you.";
+            }
+            
+            // Log for debugging
+            error_log("Sending notification to student ID: " . $thesis['user_id'] . " for thesis ID: " . $thesis_id);
+            error_log("Notification message: " . $notifMessage);
+            
+            // =============== SIMPLIFIED NOTIFICATION INSERTION ===============
+            // Diretso lang para sure na may ma-insert
             $notifQuery = "INSERT INTO notification_table (user_id, thesis_id, message, status, created_at) 
-                          VALUES (?, ?, ?, 'unread', NOW())";
-            $stmt = $conn->prepare($notifQuery);
-            $stmt->bind_param("iis", $thesis['user_id'], $thesis_id, $notifMessage);
-            $stmt->execute();
-            $stmt->close();
+                          VALUES (" . $thesis['user_id'] . ", " . $thesis_id . ", '" . mysqli_real_escape_string($conn, $notifMessage) . "', 'unread', NOW())";
+            
+            if ($conn->query($notifQuery)) {
+                error_log("Notification inserted successfully. ID: " . $conn->insert_id);
+            } else {
+                error_log("Failed to insert notification: " . $conn->error);
+            }
             
             $conn->commit();
             
             $message = "Thesis successfully " . $status . "!";
+            if ($action == 'approve') {
+                $message .= " Certificate has been generated.";
+            }
             $messageType = "success";
             
             // Refresh thesis data
@@ -190,12 +429,19 @@ if (isset($_POST['add_feedback'])) {
             
             // ✅ Create notification for student - ONE NOTIFICATION PER FEEDBACK
             $notifMessage = "New feedback on your thesis '" . $thesis['title'] . "'";
+            
+            // Log for debugging
+            error_log("Sending feedback notification to student ID: " . $thesis['user_id'] . " for thesis ID: " . $thesis_id);
+            
+            // Simplified insert
             $notifQuery = "INSERT INTO notification_table (user_id, thesis_id, message, status, created_at) 
-                          VALUES (?, ?, ?, 'unread', NOW())";
-            $stmt = $conn->prepare($notifQuery);
-            $stmt->bind_param("iis", $thesis['user_id'], $thesis_id, $notifMessage);
-            $stmt->execute();
-            $stmt->close();
+                          VALUES (" . $thesis['user_id'] . ", " . $thesis_id . ", '" . mysqli_real_escape_string($conn, $notifMessage) . "', 'unread', NOW())";
+            
+            if ($conn->query($notifQuery)) {
+                error_log("Feedback notification inserted successfully. ID: " . $conn->insert_id);
+            } else {
+                error_log("Failed to insert feedback notification: " . $conn->error);
+            }
             
             $conn->commit();
             
@@ -621,35 +867,101 @@ $pageTitle = "Review Thesis";
             color: #e0e0e0;
         }
 
+        /* =============== ENHANCED MANUSCRIPT SECTION =============== */
         .thesis-file {
             margin-bottom: 2rem;
+            background: #f8fafc;
+            border-radius: 12px;
+            padding: 1.5rem;
+            border: 1px solid #e0e0e0;
+        }
+
+        body.dark-mode .thesis-file {
+            background: #4a4a4a;
+            border-color: #6E6E6E;
         }
 
         .thesis-file h3 {
             color: #732529;
             margin-bottom: 1rem;
             font-size: 1.3rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .thesis-file h3 i {
+            color: #FE4853;
+        }
+
+        .file-actions {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+            margin-bottom: 1.5rem;
         }
 
         .file-link {
             display: inline-flex;
             align-items: center;
             gap: 0.5rem;
-            padding: 1rem 1.5rem;
-            background: #f8fafc;
-            border-radius: 8px;
+            padding: 0.75rem 1.5rem;
+            background: #3b82f6;
+            border-radius: 6px;
             text-decoration: none;
-            color: #333;
-            transition: background 0.3s;
+            color: white;
+            transition: all 0.3s;
+            font-weight: 500;
         }
 
         .file-link:hover {
-            background: #e9ecef;
+            background: #2563eb;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
         }
 
         .file-link i {
-            color: #FE4853;
-            font-size: 1.2rem;
+            font-size: 1.1rem;
+        }
+
+        .file-link.download {
+            background: #10b981;
+        }
+
+        .file-link.download:hover {
+            background: #059669;
+        }
+
+        .pdf-viewer {
+            margin-top: 1.5rem;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .pdf-viewer iframe {
+            width: 100%;
+            height: 600px;
+            border: none;
+        }
+
+        .no-file-message {
+            text-align: center;
+            padding: 3rem;
+            background: #fff3cd;
+            border-radius: 8px;
+            color: #856404;
+            border: 2px dashed #ffc107;
+        }
+
+        .no-file-message i {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+            color: #ffc107;
+        }
+
+        .no-file-message p {
+            font-size: 1.1rem;
         }
 
         /* Action Buttons */
@@ -936,6 +1248,19 @@ $pageTitle = "Review Thesis";
             .feedback-item {
                 padding: 1rem;
             }
+
+            .file-actions {
+                flex-direction: column;
+            }
+
+            .file-link {
+                width: 100%;
+                justify-content: center;
+            }
+
+            .pdf-viewer iframe {
+                height: 400px;
+            }
         }
 
         @media (max-width: 480px) {
@@ -959,6 +1284,10 @@ $pageTitle = "Review Thesis";
             .btn {
                 padding: 0.6rem 1rem;
                 font-size: 0.9rem;
+            }
+
+            .pdf-viewer iframe {
+                height: 300px;
             }
         }
     </style>
@@ -1079,16 +1408,54 @@ $pageTitle = "Review Thesis";
                 <p><?= nl2br(htmlspecialchars($thesis['abstract'])) ?></p>
             </div>
 
-            <!-- File Attachment -->
-            <?php if (!empty($thesis['file_path'])): ?>
+            <!-- =============== ENHANCED MANUSCRIPT SECTION =============== -->
             <div class="thesis-file">
-                <h3>Manuscript File</h3>
-                <a href="../<?= htmlspecialchars($thesis['file_path']) ?>" class="file-link" target="_blank">
-                    <i class="fas fa-file-pdf"></i>
-                    View Manuscript
-                </a>
+                <h3><i class="fas fa-file-pdf"></i> Manuscript File</h3>
+                
+                <?php if (!empty($thesis['file_path'])): ?>
+                    <?php 
+                    // Construct full file path
+                    $file_path = '../' . $thesis['file_path'];
+                    $file_exists = file_exists($file_path);
+                    ?>
+                    
+                    <?php if ($file_exists): ?>
+                        <!-- File Actions -->
+                        <div class="file-actions">
+                            <a href="<?= htmlspecialchars($file_path) ?>" class="file-link" target="_blank">
+                                <i class="fas fa-eye"></i> View in New Tab
+                            </a>
+                            <a href="<?= htmlspecialchars($file_path) ?>" class="file-link download" download>
+                                <i class="fas fa-download"></i> Download Manuscript
+                            </a>
+                        </div>
+                        
+                        <!-- PDF Viewer -->
+                        <div class="pdf-viewer">
+                            <iframe src="<?= htmlspecialchars($file_path) ?>" 
+                                    title="Manuscript PDF"
+                                    allowfullscreen>
+                            </iframe>
+                        </div>
+                        
+                        <p style="margin-top: 0.5rem; color: #6E6E6E; font-size: 0.85rem;">
+                            <i class="fas fa-info-circle"></i> 
+                            File: <?= basename($file_path) ?>
+                        </p>
+                    <?php else: ?>
+                        <div class="no-file-message">
+                            <i class="fas fa-exclamation-triangle"></i>
+                            <p>The manuscript file could not be found at: <?= htmlspecialchars($thesis['file_path']) ?></p>
+                            <p style="font-size: 0.9rem; margin-top: 0.5rem;">Please check if the file exists in the uploads folder.</p>
+                        </div>
+                    <?php endif; ?>
+                <?php else: ?>
+                    <div class="no-file-message">
+                        <i class="fas fa-file-pdf"></i>
+                        <p>No manuscript file uploaded for this thesis.</p>
+                    </div>
+                <?php endif; ?>
             </div>
-            <?php endif; ?>
 
             <!-- Action Buttons (Only if status is pending) -->
             <?php if ($thesis['status'] == 'pending'): ?>

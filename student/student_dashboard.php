@@ -31,6 +31,7 @@ if ($userData['role_id'] != 2) {
     }
     exit;
 }
+
 $user_columns = $conn->query("SHOW COLUMNS FROM user_table");
 $user_id_column = 'user_id';
 while ($column = $user_columns->fetch_assoc()) {
@@ -70,6 +71,7 @@ $stmt->close();
 if ($studentData) {
     $student_id = $studentData['student_id'];
 }
+
 $pendingCount = 0;
 try {
     $pendingQuery = "SELECT COUNT(*) as total FROM thesis_table 
@@ -100,9 +102,10 @@ try {
     $approvedCount = 0;
 }
 
+// FIXED: Rejected count - use DISTINCT to count unique theses only
 $rejectedCount = 0;
 try {
-    $rejectedQuery = "SELECT COUNT(*) as total FROM thesis_table 
+    $rejectedQuery = "SELECT COUNT(DISTINCT thesis_id) as total FROM thesis_table 
                       WHERE student_id = ? AND status = 'rejected'";
     $stmt = $conn->prepare($rejectedQuery);
     $stmt->bind_param("i", $student_id);
@@ -145,47 +148,55 @@ try {
     $totalCount = 0;
 }
 
+// =============== UPDATED NOTIFICATION QUERIES ===============
 $unreadCount = 0;
 $recentNotifications = [];
 
 try {
-    $countQuery = "SELECT COUNT(*) as total FROM notification_table 
-                   WHERE user_id = ? AND status = 'unread'";
-    $stmt = $conn->prepare($countQuery);
-    $stmt->bind_param("i", $user_id);
-    $stmt->execute();
-    $countResult = $stmt->get_result()->fetch_assoc();
-    $unreadCount = $countResult['total'] ?? 0;
-    $stmt->close();
-    
+    // SIMPLIFIED NOTIFICATION QUERY - direct from notification_table
     $notifQuery = "SELECT 
-                    n.notification_id as id, 
-                    n.message, 
-                    n.status,
-                    n.created_at,
-                    n.thesis_id,
-                    t.title as thesis_title,
-                    CASE 
-                        WHEN n.message LIKE '%feedback%' THEN 'feedback'
-                        WHEN n.message LIKE '%approved%' THEN 'approved'
-                        WHEN n.message LIKE '%rejected%' THEN 'rejected'
-                        ELSE 'other'
-                    END as notification_type
-                   FROM notification_table n
-                   LEFT JOIN thesis_table t ON n.thesis_id = t.thesis_id
-                   WHERE n.user_id = ? 
-                   ORDER BY n.created_at DESC 
+                    notification_id as id, 
+                    message, 
+                    status,
+                    created_at,
+                    thesis_id
+                   FROM notification_table 
+                   WHERE user_id = ? 
+                   ORDER BY created_at DESC 
                    LIMIT 10";
     $stmt = $conn->prepare($notifQuery);
     $stmt->bind_param("i", $user_id);
     $stmt->execute();
     $result = $stmt->get_result();
     
+    $recentNotifications = [];
     while ($row = $result->fetch_assoc()) {
+        // Get thesis title if thesis_id exists
+        if (!empty($row['thesis_id'])) {
+            $titleQuery = "SELECT title FROM thesis_table WHERE thesis_id = ?";
+            $titleStmt = $conn->prepare($titleQuery);
+            $titleStmt->bind_param("i", $row['thesis_id']);
+            $titleStmt->execute();
+            $titleResult = $titleStmt->get_result();
+            if ($titleRow = $titleResult->fetch_assoc()) {
+                $row['thesis_title'] = $titleRow['title'];
+            }
+            $titleStmt->close();
+        } else {
+            $row['thesis_title'] = '';
+        }
         $row['is_read'] = $row['status'];
         $recentNotifications[] = $row;
     }
     $stmt->close();
+    
+    // Calculate unread count
+    $unreadCount = 0;
+    foreach ($recentNotifications as $notif) {
+        if ($notif['status'] == 'unread') {
+            $unreadCount++;
+        }
+    }
     
 } catch (Exception $e) {
     error_log("Notification error: " . $e->getMessage());
@@ -193,10 +204,26 @@ try {
     $recentNotifications = [];
 }
 
+// FIXED: Recent feedback with rejection count
 $recentFeedback = [];
 try {
-    $feedbackQuery = "SELECT f.*, t.title as thesis_title, 
-                             u.first_name as faculty_first, u.last_name as faculty_last
+    $feedbackQuery = "SELECT 
+                        f.*, 
+                        t.title as thesis_title, 
+                        u.first_name as faculty_first, 
+                        u.last_name as faculty_last,
+                        t.status as thesis_status,
+                        (
+                            SELECT COUNT(*) 
+                            FROM feedback_table f2 
+                            WHERE f2.thesis_id = t.thesis_id 
+                            AND f2.comments LIKE '%reject%'
+                        ) as rejection_count,
+                        (
+                            SELECT COUNT(*) 
+                            FROM feedback_table f3 
+                            WHERE f3.thesis_id = t.thesis_id
+                        ) as total_feedback_count
                       FROM feedback_table f
                       JOIN thesis_table t ON f.thesis_id = t.thesis_id
                       JOIN user_table u ON f.faculty_id = u.user_id
@@ -408,7 +435,7 @@ $pageTitle = "Student Dashboard";
       border-bottom: 1px solid #f0f0f0;
       transition: background 0.2s;
       cursor: pointer;
-      color: #000000; /* Black font */
+      color: #000000;
     }
 
     body.dark-mode .notification-item {
@@ -435,7 +462,7 @@ $pageTitle = "Student Dashboard";
 
     .notif-message {
       font-size: 0.9rem;
-      color: #000000; /* Black font */
+      color: #000000;
       margin-bottom: 5px;
       font-weight: 500;
       display: flex;
@@ -453,7 +480,7 @@ $pageTitle = "Student Dashboard";
 
     .notif-time {
       font-size: 0.75rem;
-      color: #000000; /* Black font */
+      color: #000000;
     }
 
     body.dark-mode .notif-time {
@@ -469,7 +496,7 @@ $pageTitle = "Student Dashboard";
 
     .no-notifications {
       text-align: center;
-      color: #000000; /* Black font */
+      color: #000000;
       padding: 30px 0;
     }
 
@@ -481,7 +508,7 @@ $pageTitle = "Student Dashboard";
       padding: 15px 20px;
       text-align: center;
       border-top: 1px solid #e0e0e0;
-      color: #000000; /* Black font */
+      color: #000000;
     }
 
     body.dark-mode .notification-footer {
@@ -540,7 +567,7 @@ $pageTitle = "Student Dashboard";
       z-index: 1000;
       overflow: hidden;
       border: 1px solid #e0e0e0;
-      color: #000000; /* Black font */
+      color: #000000;
     }
 
     body.dark-mode .dropdown-content {
@@ -567,7 +594,7 @@ $pageTitle = "Student Dashboard";
     }
 
     .dropdown-content a {
-      color: #000000; /* Black font */
+      color: #000000;
       padding: 12px 16px;
       text-decoration: none;
       display: flex;
@@ -668,7 +695,7 @@ $pageTitle = "Student Dashboard";
     }
 
     .welcome-section p {
-      color: #000000; /* Black font */
+      color: #000000;
     }
 
     body.dark-mode .welcome-section p {
@@ -691,7 +718,7 @@ $pageTitle = "Student Dashboard";
       box-shadow: 0 3px 14px rgba(110, 110, 110, 0.1);
       text-align: center;
       transition: transform 0.18s, background 0.3s, box-shadow 0.3s;
-      color: #000000; /* Black font */
+      color: #000000;
     }
 
     body.dark-mode .stat-card {
@@ -726,7 +753,7 @@ $pageTitle = "Student Dashboard";
     }
 
     .stat-label {
-      color: #000000; /* Black font */
+      color: #000000;
       font-size: 0.9rem;
       margin-top: 0.3rem;
     }
@@ -760,7 +787,7 @@ $pageTitle = "Student Dashboard";
 
     .quick-links h3 {
       margin-bottom: 1.2rem;
-      color: #000000; /* Black font */
+      color: #000000;
       display: flex;
       align-items: center;
       gap: 0.5rem;
@@ -808,16 +835,14 @@ $pageTitle = "Student Dashboard";
       background: #000000;
     }
 
-    /* ====================================
-       RECENT FEEDBACK SECTION
-    ==================================== */
+    /* Recent Feedback Section with Rejection Badges */
     .recent-feedback {
       margin: 2rem 1rem;
       background: white;
       border-radius: 12px;
       padding: 1.5rem;
       box-shadow: 0 3px 14px rgba(110, 110, 110, 0.1);
-      color: #000000; /* Black font */
+      color: #000000;
     }
 
     body.dark-mode .recent-feedback {
@@ -854,7 +879,17 @@ $pageTitle = "Student Dashboard";
       border-left: 3px solid #FE4853;
       transition: transform 0.2s;
       position: relative;
-      color: #000000; /* Black font */
+      color: #000000;
+    }
+
+    .feedback-item.rejected-feedback {
+        border-left: 3px solid #ef4444;
+        background: #fff5f5;
+    }
+
+    body.dark-mode .feedback-item.rejected-feedback {
+        background: #4a2a2a;
+        border-left-color: #ef4444;
     }
 
     .feedback-item:hover {
@@ -871,21 +906,46 @@ $pageTitle = "Student Dashboard";
       justify-content: space-between;
       align-items: center;
       margin-bottom: 0.5rem;
-      color: #000000; /* Black font */
+      color: #000000;
     }
 
     .feedback-thesis {
       font-weight: 600;
       color: #000000;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
     }
 
     body.dark-mode .feedback-thesis {
       color: #FE4853;
     }
 
+    .rejection-badge {
+        display: inline-block;
+        background: #ef4444;
+        color: white;
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-size: 0.7rem;
+        font-weight: normal;
+        animation: pulse 2s infinite;
+    }
+
+    .feedback-count-badge {
+        display: inline-block;
+        background: #6E6E6E;
+        color: white;
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-size: 0.7rem;
+        font-weight: normal;
+    }
+
     .feedback-date {
       font-size: 0.8rem;
-      color: #000000; /* Black font */
+      color: #000000;
     }
 
     body.dark-mode .feedback-date {
@@ -894,7 +954,7 @@ $pageTitle = "Student Dashboard";
 
     .feedback-from {
       font-size: 0.85rem;
-      color: #000000; /* Black font */
+      color: #000000;
       margin-bottom: 0.5rem;
     }
 
@@ -908,7 +968,7 @@ $pageTitle = "Student Dashboard";
     }
 
     .feedback-content {
-      color: #000000; /* Black font */
+      color: #000000;
       line-height: 1.5;
     }
 
@@ -1348,15 +1408,6 @@ $pageTitle = "Student Dashboard";
     <a href="archived.php" class="nav-link">
       <i class="fas fa-archive"></i> Archived Theses
     </a>
-    <a href="profile.php" class="nav-link">
-      <i class="fas fa-user-circle"></i> Profile
-    </a>
-    <a href="notification.php" class="nav-link">
-      <i class="fas fa-bell"></i> Notifications
-      <?php if ($unreadCount > 0): ?>
-        <span style="background: white; color: #FE4853; padding: 2px 6px; border-radius: 10px; font-size: 0.7rem; margin-left: auto;"><?= $unreadCount ?></span>
-      <?php endif; ?>
-    </a>
   </nav>
 
   <div class="sidebar-footer">
@@ -1411,6 +1462,7 @@ $pageTitle = "Student Dashboard";
                 <?php foreach ($recentNotifications as $notif): ?>
                   <div class="notification-item <?= $notif['status'] == 'unread' ? 'unread' : '' ?>"
                        data-notification-id="<?= $notif['id'] ?? '' ?>"
+                       data-thesis-id="<?= $notif['thesis_id'] ?? 0 ?>"
                        onclick="markAsRead(this)">
                     <div class="notif-message">
                       <?php if (strpos($notif['message'], 'feedback') !== false): ?>
@@ -1490,15 +1542,26 @@ $pageTitle = "Student Dashboard";
         <div class="stat-label">Total</div>
       </div>
     </div>
+    
     <?php if (!empty($recentFeedback)): ?>
     <div class="recent-feedback">
       <h3><i class="fas fa-comments"></i> Recent Feedback from Faculty</h3>
       <div class="feedback-list">
         <?php foreach ($recentFeedback as $fb): ?>
-          <div class="feedback-item">
+          <div class="feedback-item <?= ($fb['thesis_status'] == 'rejected') ? 'rejected-feedback' : '' ?>">
             <div class="feedback-header">
               <span class="feedback-thesis">
                 <i class="fas fa-book"></i> <?= htmlspecialchars($fb['thesis_title']) ?>
+                <?php if (($fb['rejection_count'] ?? 0) > 1): ?>
+                  <span class="rejection-badge">
+                    Rejected <?= $fb['rejection_count'] ?>x
+                  </span>
+                <?php endif; ?>
+                <?php if (($fb['total_feedback_count'] ?? 0) > 1): ?>
+                  <span class="feedback-count-badge">
+                    <?= $fb['total_feedback_count'] ?> feedback
+                  </span>
+                <?php endif; ?>
               </span>
               <span class="feedback-date">
                 <i class="fas fa-clock"></i> <?= date('M d, Y', strtotime($fb['feedback_date'])) ?>
@@ -1537,23 +1600,22 @@ $pageTitle = "Student Dashboard";
 
   const avatarBtn = document.getElementById('avatarBtn');
   const dropdownMenu = document.getElementById('dropdownMenu');
+  const notificationBell = document.getElementById('notificationBell');
+  const notificationDropdown = document.getElementById('notificationDropdown');
 
   if (avatarBtn) {
     avatarBtn.addEventListener('click', function(e) {
       e.stopPropagation();
       dropdownMenu.classList.toggle('show');
-      notificationDropdown.classList.remove('show');
+      if (notificationDropdown) notificationDropdown.classList.remove('show');
     });
   }
   
-  const notificationBell = document.getElementById('notificationBell');
-  const notificationDropdown = document.getElementById('notificationDropdown');
-
   if (notificationBell) {
     notificationBell.addEventListener('click', function(e) {
       e.stopPropagation();
       notificationDropdown.classList.toggle('show');
-      dropdownMenu.classList.remove('show');
+      if (dropdownMenu) dropdownMenu.classList.remove('show');
     });
   }
 
@@ -1574,18 +1636,25 @@ $pageTitle = "Student Dashboard";
     });
   }
 
-  // Mark all as read
+  // =============== UPDATED NOTIFICATION FUNCTIONS WITH UNIFIED HANDLER ===============
+  
+  // Mark all as read using unified handler
   document.getElementById('markAllRead')?.addEventListener('click', function(e) {
     e.preventDefault();
     
-    fetch('/ArchivingThesis/student/mark_all_read.php', {
+    console.log('Mark all as read clicked');
+    
+    fetch('notification_handler.php', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-      }
+      },
+      body: JSON.stringify({ action: 'mark_all_read' })
     })
     .then(response => response.json())
     .then(data => {
+      console.log('Mark all response:', data);
+      
       if (data.success) {
         document.querySelectorAll('.notification-item').forEach(item => {
           item.classList.remove('unread');
@@ -1606,23 +1675,40 @@ $pageTitle = "Student Dashboard";
     .catch(error => console.error('Error:', error));
   });
 
+  // Updated markAsRead function using unified handler
   function markAsRead(element) {
     var notificationId = element.getAttribute('data-notification-id');
+    var thesisId = element.getAttribute('data-thesis-id');
+    
+    console.log('Notification clicked - ID:', notificationId, 'Thesis ID:', thesisId);
     
     if (!notificationId) {
       console.error('Notification ID not found');
       return;
     }
     
-    fetch('/ArchivingThesis/student/mark_notification_read.php', {
+    // Show loading state
+    element.style.opacity = '0.5';
+    element.style.pointerEvents = 'none';
+    
+    // Use unified notification handler
+    fetch('notification_handler.php', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ notification_id: notificationId })
+      body: JSON.stringify({ 
+        action: 'mark_read',
+        notification_id: notificationId 
+      })
     })
-    .then(response => response.json())
+    .then(response => {
+      console.log('Response status:', response.status);
+      return response.json();
+    })
     .then(data => {
+      console.log('Response data:', data);
+      
       if (data.success) {
         element.classList.remove('unread');
         
@@ -1647,9 +1733,21 @@ $pageTitle = "Student Dashboard";
             }
           }
         }
+        
+        if (thesisId && thesisId > 0 && thesisId != '0') {
+          window.location.href = 'projects.php';
+        }
+      } else {
+        console.error('Server error:', data.error);
+        element.style.opacity = '1';
+        element.style.pointerEvents = 'auto';
       }
     })
-    .catch(error => console.error('Error:', error));
+    .catch(error => {
+      console.error('Fetch error:', error);
+      element.style.opacity = '1';
+      element.style.pointerEvents = 'auto';
+    });
   }
 
   // Mobile menu toggle
@@ -1689,7 +1787,6 @@ $pageTitle = "Student Dashboard";
     });
   }
 
-  // Close sidebar when clicking on overlay
   if (overlay) {
     overlay.addEventListener('click', function() {
       sidebar.classList.remove('show');
