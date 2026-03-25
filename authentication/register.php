@@ -60,7 +60,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
             <form method="POST" autocomplete="off">
                 <!-- Role -->
                 <div class="form-group">
-                    <label>Role <span>*</span></label>
+                    <label>Role <span></span></label>
                     <select name="role_id" required>
                         <option value="" disabled selected>Select role</option>
                         <option value="1">Admin</option>
@@ -75,45 +75,51 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                 <!-- First Name & Last Name row -->
                 <div class="form-row">
                     <div>
-                        <label>First Name <span>*</span></label>
+                        <label>First Name <span></span></label>
                         <input type="text" name="first_name" placeholder="Enter first name" required>
                     </div>
                     <div>
-                        <label>Last Name <span>*</span></label>
+                        <label>Last Name <span></span></label>
                         <input type="text" name="last_name" placeholder="Enter last name" required>
                     </div>
                 </div>
 
                 <!-- Email -->
                 <div class="form-group">
-                    <label>Email <span>*</span></label>
+                    <label>Email <span></span></label>
                     <input type="email" name="email" placeholder="Enter email" required>
                 </div>
 
                 <!-- Username -->
                 <div class="form-group">
-                    <label>Username <span>*</span></label>
+                    <label>Username <span></span></label>
                     <input type="text" name="username" placeholder="Enter username" required>
                 </div>
 
                 <!-- Password & Confirm Password row -->
                 <div class="form-row">
                     <div>
-                        <label>Password <span>*</span></label>
+                        <label>Password <span></span></label>
                         <input type="password" name="password" placeholder="Enter password" required>
                     </div>
                     <div>
-                        <label>Confirm Password <span>*</span></label>
+                        <label>Confirm Password <span></span></label>
                         <input type="password" name="cpassword" placeholder="Confirm password" required>
                     </div>
                 </div>
 
                 <!-- Department & Birth Date row -->
                 <div class="form-row">
-                    <div>
-                        <label>Department</label>
-                        <input type="text" name="department" placeholder="Department">
-                    </div>
+                    <div class="form-group">
+                    <label>Department <span></span></label>
+                    <select name="department_id" required>
+                        <option value="" disabled selected>Select department</option>
+                        <option value="1"> BSIT</option>
+                        <option value="2">BS CRIM</option>
+                        <option value="3">BSBA</option>
+                        <option value="4">EDUC </option>
+                    </select>
+                </div>
                     <div>
                         <label>Birth Date</label>
                         <input type="date" name="birth_date">
@@ -122,7 +128,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
                 <!-- Contact Number -->
                 <div class="form-group">
-                    <label>Contact Number <span>*</span></label>
+                    <label>Contact Number <span></span></label>
                     <input type="text" name="contact_number" placeholder="09xxxxxxxxx" required>
                 </div>
 
