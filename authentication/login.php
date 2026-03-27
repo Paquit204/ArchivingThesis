@@ -48,7 +48,9 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                     
                     $redirect = null;
                     
-                    // Set role in session and redirect path
+                    // ============================================================
+                    // CORRECT ROLE MAPPING - I-ADJUST NI BASE SA IMO DATABASE
+                    // ============================================================
                     switch ($role_id) {
                         case 1:
                             $_SESSION['role'] = 'admin';
@@ -67,12 +69,30 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                             $redirect = "/ArchivingThesis/departmentDeanDashboard/dean.php";
                             break;
                         case 5:
-                        case 6:
                             $_SESSION['role'] = 'librarian';
                             $redirect = "/ArchivingThesis/librarian/librarian_dashboard.php";
                             break;
+                        case 6:
+                            $_SESSION['role'] = 'coordinator';
+                            
+                            // Get coordinator's department info
+                            $dept_query = "SELECT d.department_name, d.department_code, dc.position 
+                                           FROM department_coordinator dc 
+                                           JOIN department_table d ON dc.department_id = d.department_id 
+                                           WHERE dc.user_id = ?";
+                            $dept_stmt = $conn->prepare($dept_query);
+                            $dept_stmt->bind_param("i", $row['user_id']);
+                            $dept_stmt->execute();
+                            $dept_result = $dept_stmt->get_result();
+                            $dept_data = $dept_result->fetch_assoc();
+                            
+                            $_SESSION['department'] = $dept_data['department_name'] ?? 'Research Department';
+                            $_SESSION['position'] = $dept_data['position'] ?? 'Research Coordinator';
+                            $dept_stmt->close();
+                            
+                            $redirect = "/ArchivingThesis/coordinator/coordinatorDashboard.php";
+                            break;
                         default:
-                            $_SESSION['role'] = 'unknown';
                             $message = "Invalid user role (ID: $role_id). Please contact administrator.";
                             $message_type = "error";
                             break;
@@ -178,37 +198,6 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
                 <button type="submit" class="btn-login">Login</button>
 
-                <div class="divider">
-                    <span>OR</span>
-                </div>
-
-                <!-- Quick Login Buttons -->
-                <div class="role-selection">
-                    <p class="role-title">Quick Login As:</p>
-                    <div class="role-buttons">
-                        <button type="button" class="role-btn" onclick="quickLogin('student')">
-                            <span class="material-symbols-outlined role-icon">school</span>
-                            <span>Student</span>
-                        </button>
-                        <button type="button" class="role-btn" onclick="quickLogin('faculty')">
-                            <span class="material-symbols-outlined role-icon">badge</span>
-                            <span>Faculty</span>
-                        </button>
-                        <button type="button" class="role-btn" onclick="quickLogin('dean')">
-                            <span class="material-symbols-outlined role-icon">account_balance</span>
-                            <span>Dean</span>
-                        </button>
-                        <button type="button" class="role-btn" onclick="quickLogin('admin')">
-                            <span class="material-symbols-outlined role-icon">settings</span>
-                            <span>Admin</span>
-                        </button>
-                        <button type="button" class="role-btn" onclick="quickLogin('librarian')">
-                            <span class="material-symbols-outlined role-icon">menu_book</span>
-                            <span>Librarian</span>
-                        </button>
-                    </div>
-                </div>
-
                 <div class="register-link">
                     <p>Don't have an account? <a href="register.php">Register here</a></p>
                 </div>
@@ -217,31 +206,42 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     </div>
 
     <script>
-        function quickLogin(role) {
-            switch(role) {
-                case 'student':
-                    document.getElementById('username').value = 'student';
-                    document.getElementById('password').value = 'student123';
-                    break;
-                case 'faculty':
-                    document.getElementById('username').value = 'faculty';
-                    document.getElementById('password').value = 'faculty123';
-                    break;
-                case 'dean':
-                    document.getElementById('username').value = 'dean';
-                    document.getElementById('password').value = 'dean123';
-                    break;
-                case 'admin':
-                    document.getElementById('username').value = 'admin';
-                    document.getElementById('password').value = 'admin123';
-                    break;
-                case 'librarian':
-                    document.getElementById('username').value = 'librarian';
-                    document.getElementById('password').value = 'librarian123';
-                    break;
+        // Password toggle
+        const loginToggle = document.getElementById('login-toggle');
+        const loginPass = document.getElementById('password');
+
+        if (loginToggle && loginPass) {
+            loginToggle.addEventListener('click', () => {
+                if (loginPass.type === 'password') {
+                    loginPass.type = 'text';
+                    loginToggle.textContent = 'visibility';
+                } else {
+                    loginPass.type = 'password';
+                    loginToggle.textContent = 'visibility_off';
+                }
+            });
+        }
+
+        // Dark mode toggle
+        const toggle = document.getElementById('themeToggle');
+        if (toggle) {
+            toggle.addEventListener('click', () => {
+                document.body.classList.toggle('dark-mode');
+                const icon = toggle.querySelector('span');
+                if (document.body.classList.contains('dark-mode')) {
+                    icon.textContent = 'light_mode';
+                    localStorage.setItem('darkMode', 'true');
+                } else {
+                    icon.textContent = 'dark_mode';
+                    localStorage.setItem('darkMode', 'false');
+                }
+            });
+            
+            if (localStorage.getItem('darkMode') === 'true') {
+                document.body.classList.add('dark-mode');
+                toggle.querySelector('span').textContent = 'light_mode';
             }
         }
     </script>
-    <script src="js/login.js"></script>
 </body>
 </html>

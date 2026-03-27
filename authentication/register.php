@@ -58,17 +58,17 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
             <?php endif; ?>
 
             <form method="POST" autocomplete="off">
-                <!-- Role -->
+                <!-- Role - UPDATED WITH CORRECT MAPPING -->
                 <div class="form-group">
                     <label>Role <span></span></label>
                     <select name="role_id" required>
                         <option value="" disabled selected>Select role</option>
                         <option value="1">Admin</option>
                         <option value="2">Student</option>
-                        <option value="3">Researcher Adviser</option>
-                        <option value="4">Researcher Coordinator</option>
-                        <option value="5">Department Dean</option>
-                        <option value="6">Librarian</option>
+                        <option value="3">Faculty / Research Adviser</option>
+                        <option value="4">Department Dean</option>
+                        <option value="5">Librarian</option>
+                        <option value="6">Research Coordinator</option>
                     </select>
                 </div>
 
@@ -111,15 +111,8 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                 <!-- Department & Birth Date row -->
                 <div class="form-row">
                     <div class="form-group">
-                    <label>Department <span></span></label>
-                    <select name="department_id" required>
-                        <option value="" disabled selected>Select department</option>
-                        <option value="1"> BSIT</option>
-                        <option value="2">BS CRIM</option>
-                        <option value="3">BSBA</option>
-                        <option value="4">EDUC </option>
-                    </select>
-                </div>
+                        <label>Department <span></span></label>
+                    </div>
                     <div>
                         <label>Birth Date</label>
                         <input type="date" name="birth_date">

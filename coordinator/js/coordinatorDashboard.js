@@ -1,28 +1,28 @@
-// Mobile menu, profile dropdown, search, and charts functionality
+// Coordinator Dashboard JavaScript
+
 document.addEventListener('DOMContentLoaded', function() {
     // Sidebar elements
     const hamburger = document.getElementById('hamburgerBtn');
-    const sideNav = document.getElementById('sideNav');
+    const sidebar = document.getElementById('sidebar');
     const overlay = document.getElementById('sidebarOverlay');
     
     // Profile elements
     const profileWrapper = document.getElementById('profileWrapper');
     const profileDropdown = document.getElementById('profileDropdown');
     
-    // Search functionality
-    const searchInput = document.querySelector('.search-bar input');
-    const searchButton = document.querySelector('.search-bar button');
+    // Theme toggle
+    const darkmodeToggle = document.getElementById('darkmode');
     
     // Open sidebar function
     function openSidebar() {
-        if (sideNav) sideNav.classList.add('open');
+        if (sidebar) sidebar.classList.add('open');
         if (overlay) overlay.classList.add('active');
         document.body.style.overflow = 'hidden';
     }
     
     // Close sidebar function
     function closeSidebar() {
-        if (sideNav) sideNav.classList.remove('open');
+        if (sidebar) sidebar.classList.remove('open');
         if (overlay) overlay.classList.remove('active');
         document.body.style.overflow = '';
     }
@@ -30,7 +30,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // Toggle sidebar function
     function toggleSidebar(e) {
         if (e) e.stopPropagation();
-        if (sideNav && sideNav.classList.contains('open')) {
+        if (sidebar && sidebar.classList.contains('open')) {
             closeSidebar();
         } else {
             openSidebar();
@@ -53,7 +53,6 @@ document.addEventListener('DOMContentLoaded', function() {
             profileDropdown.classList.toggle('show');
         });
         
-        // Close dropdown when clicking outside
         document.addEventListener('click', function(e) {
             if (profileDropdown.classList.contains('show') && 
                 !profileWrapper.contains(e.target)) {
@@ -65,7 +64,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // Close sidebar with Escape key
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') {
-            if (sideNav && sideNav.classList.contains('open')) {
+            if (sidebar && sidebar.classList.contains('open')) {
                 closeSidebar();
             }
             if (profileDropdown && profileDropdown.classList.contains('show')) {
@@ -74,14 +73,61 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
     
-    // Search functionality
-    function searchTheses() {
-        if (!searchInput) return;
+    // Handle window resize
+    let resizeTimer;
+    window.addEventListener('resize', function() {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(function() {
+            if (window.innerWidth > 768 && sidebar && sidebar.classList.contains('open')) {
+                closeSidebar();
+            }
+        }, 250);
+    });
+    
+    // Close sidebar when clicking sidebar links on mobile
+    const sideNavLinks = document.querySelectorAll('.nav-item');
+    sideNavLinks.forEach(link => {
+        link.addEventListener('click', function() {
+            if (window.innerWidth <= 768) {
+                closeSidebar();
+            }
+        });
+    });
+    
+    // Dark mode toggle
+    if (darkmodeToggle) {
+        if (localStorage.getItem('darkMode') === 'true') {
+            document.body.classList.add('dark-mode');
+            darkmodeToggle.checked = true;
+        }
         
-        const searchTerm = searchInput.value.toLowerCase();
-        const tableRows = document.querySelectorAll('.theses-table tbody tr');
-        
-        if (tableRows.length > 0) {
+        darkmodeToggle.addEventListener('change', function() {
+            if (this.checked) {
+                document.body.classList.add('dark-mode');
+                localStorage.setItem('darkMode', 'true');
+            } else {
+                document.body.classList.remove('dark-mode');
+                localStorage.setItem('darkMode', 'false');
+            }
+            updateChartTheme();
+        });
+    }
+    
+    // Notification click
+    const notificationIcon = document.querySelector('.notification-icon');
+    if (notificationIcon) {
+        notificationIcon.addEventListener('click', function() {
+            window.location.href = 'notification.php';
+        });
+    }
+    
+    // Search functionality for theses table
+    const thesisSearchInput = document.getElementById('thesisSearchInput');
+    if (thesisSearchInput) {
+        thesisSearchInput.addEventListener('keyup', function() {
+            const searchTerm = this.value.toLowerCase();
+            const tableRows = document.querySelectorAll('.theses-table tbody tr');
+            
             tableRows.forEach(row => {
                 const title = row.cells[0]?.textContent.toLowerCase() || '';
                 const author = row.cells[1]?.textContent.toLowerCase() || '';
@@ -92,174 +138,156 @@ document.addEventListener('DOMContentLoaded', function() {
                     row.style.display = 'none';
                 }
             });
-        } else {
-            // For thesis items in waiting review section
-            const thesisItems = document.querySelectorAll('.thesis-item');
-            thesisItems.forEach(item => {
-                const title = item.querySelector('.thesis-info strong')?.textContent.toLowerCase() || '';
-                const author = item.querySelector('.thesis-info .meta')?.textContent.toLowerCase() || '';
-                
-                if (title.includes(searchTerm) || author.includes(searchTerm)) {
-                    item.style.display = 'flex';
-                } else {
-                    item.style.display = 'none';
-                }
-            });
-        }
-    }
-    
-    if (searchButton) {
-        searchButton.addEventListener('click', searchTheses);
-    }
-    
-    if (searchInput) {
-        searchInput.addEventListener('keyup', function(e) {
-            if (e.key === 'Enter') {
-                searchTheses();
-            }
         });
     }
     
-    // Handle window resize - close sidebar if open on large screens
-    let resizeTimer;
-    window.addEventListener('resize', function() {
-        clearTimeout(resizeTimer);
-        resizeTimer = setTimeout(function() {
-            if (window.innerWidth > 768 && sideNav && sideNav.classList.contains('open')) {
-                closeSidebar();
-            }
-        }, 250);
-    });
+    // Get chart data from PHP
+    const chartData = window.chartData || {
+        status: { pending: 0, forwarded: 0, rejected: 0 },
+        monthly: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        months: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+    };
     
-    // Close sidebar when clicking sidebar links on mobile
-    const sideNavLinks = document.querySelectorAll('.side-nav a');
-    sideNavLinks.forEach(link => {
-        link.addEventListener('click', function() {
-            if (window.innerWidth <= 768) {
-                closeSidebar();
-            }
-        });
-    });
+    let statusChart = null;
+    let monthlyChart = null;
     
-    // Initialize Charts
-    function initCharts() {
-        // Get statistics from PHP (passed via data attributes)
-        const chartData = document.getElementById('chartData');
-        if (!chartData) return;
+    function getTextColor() {
+        return document.body.classList.contains('dark-mode') ? '#e5e7eb' : '#0f172a';
+    }
+    
+    function getGridColor() {
+        return document.body.classList.contains('dark-mode') ? '#334155' : '#e2e8f0';
+    }
+    
+    // Status Chart
+    function createStatusChart() {
+        const canvas = document.getElementById('statusChart');
+        if (!canvas) return;
+        if (statusChart) statusChart.destroy();
         
-        const pendingCount = parseInt(chartData.dataset.pending) || 0;
-        const forwardedCount = parseInt(chartData.dataset.forwarded) || 0;
-        const rejectedCount = parseInt(chartData.dataset.rejected) || 0;
-        const total = pendingCount + forwardedCount + rejectedCount;
-        
-        // Status Distribution Pie Chart
-        const statusCtx = document.getElementById('statusChart');
-        if (statusCtx && typeof Chart !== 'undefined') {
-            new Chart(statusCtx, {
-                type: 'doughnut',
-                data: {
-                    labels: ['Pending Review', 'Forwarded to Dean', 'Rejected'],
-                    datasets: [{
-                        data: [pendingCount, forwardedCount, rejectedCount],
-                        backgroundColor: ['#f39c12', '#27ae60', '#e74c3c'],
-                        borderWidth: 0,
-                        hoverOffset: 10
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: {
-                            position: 'bottom',
-                            labels: {
-                                font: {
-                                    size: 12
-                                }
-                            }
-                        },
-                        tooltip: {
-                            callbacks: {
-                                label: function(context) {
-                                    const label = context.label || '';
-                                    const value = context.raw || 0;
-                                    const percentage = total > 0 ? ((value / total) * 100).toFixed(1) : 0;
-                                    return `${label}: ${value} (${percentage}%)`;
-                                }
-                            }
-                        }
-                    },
-                    cutout: '60%'
-                }
-            });
-        }
-        
-        // Monthly Submissions Line Chart (Sample Data - Replace with actual database data)
-        const monthlyCtx = document.getElementById('monthlyChart');
-        if (monthlyCtx && typeof Chart !== 'undefined') {
-            new Chart(monthlyCtx, {
-                type: 'line',
-                data: {
-                    labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
-                    datasets: [
-                        {
-                            label: 'Submissions',
-                            data: [3, 5, 8, 6, 10, 12, 8, 15, 18, 14, 20, 25],
-                            borderColor: '#FE4853',
-                            backgroundColor: 'rgba(254, 72, 83, 0.1)',
-                            tension: 0.4,
-                            fill: true,
-                            pointBackgroundColor: '#FE4853',
-                            pointBorderColor: '#fff',
-                            pointBorderWidth: 2,
-                            pointRadius: 4,
-                            pointHoverRadius: 6
-                        }
-                    ]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: {
-                            display: false
-                        },
-                        tooltip: {
-                            callbacks: {
-                                label: function(context) {
-                                    return `Submissions: ${context.raw}`;
-                                }
-                            }
-                        }
-                    },
-                    scales: {
-                        y: {
-                            beginAtZero: true,
-                            grid: {
-                                color: '#e2e8f0'
-                            },
-                            title: {
-                                display: true,
-                                text: 'Number of Theses',
-                                color: '#6c757d'
-                            }
-                        },
-                        x: {
-                            grid: {
-                                display: false
-                            },
-                            title: {
-                                display: true,
-                                text: 'Month',
-                                color: '#6c757d'
+        statusChart = new Chart(canvas, {
+            type: 'doughnut',
+            data: {
+                labels: ['Pending Review', 'Forwarded to Dean', 'Rejected'],
+                datasets: [{
+                    data: [chartData.status.pending, chartData.status.forwarded, chartData.status.rejected],
+                    backgroundColor: ['#f59e0b', '#10b981', '#ef4444'],
+                    borderWidth: 0,
+                    hoverOffset: 10
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: function(ctx) {
+                                const total = ctx.dataset.data.reduce((a, b) => a + b, 0);
+                                const pct = total > 0 ? ((ctx.raw / total) * 100).toFixed(1) : 0;
+                                return `${ctx.label}: ${ctx.raw} (${pct}%)`;
                             }
                         }
                     }
+                },
+                cutout: '65%'
+            }
+        });
+    }
+    
+    // Monthly Chart
+    function createMonthlyChart() {
+        const canvas = document.getElementById('monthlyChart');
+        if (!canvas) return;
+        if (monthlyChart) monthlyChart.destroy();
+        
+        monthlyChart = new Chart(canvas, {
+            type: 'line',
+            data: {
+                labels: chartData.months,
+                datasets: [{
+                    label: 'Number of Theses',
+                    data: chartData.monthly,
+                    borderColor: '#d32f2f',
+                    backgroundColor: 'rgba(211, 47, 47, 0.05)',
+                    borderWidth: 2,
+                    pointBackgroundColor: '#d32f2f',
+                    pointBorderColor: '#fff',
+                    pointBorderWidth: 2,
+                    pointRadius: 4,
+                    pointHoverRadius: 6,
+                    tension: 0.3,
+                    fill: true
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: function(ctx) {
+                                return `Theses: ${ctx.raw}`;
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        ticks: { color: getTextColor(), font: { size: 9 } },
+                        grid: { color: getGridColor() }
+                    },
+                    y: {
+                        beginAtZero: true,
+                        ticks: { color: getTextColor(), stepSize: 5, font: { size: 9 } },
+                        grid: { color: getGridColor() },
+                        title: {
+                            display: true,
+                            text: 'Number of Theses',
+                            color: getTextColor(),
+                            font: { size: 10 }
+                        }
+                    }
                 }
-            });
+            }
+        });
+    }
+    
+    function updateChartTheme() {
+        if (monthlyChart) {
+            monthlyChart.options.scales.x.ticks.color = getTextColor();
+            monthlyChart.options.scales.x.grid.color = getGridColor();
+            monthlyChart.options.scales.y.ticks.color = getTextColor();
+            monthlyChart.options.scales.y.grid.color = getGridColor();
+            monthlyChart.options.scales.y.title.color = getTextColor();
+            monthlyChart.update();
         }
     }
     
-    // Call chart initialization
-    initCharts();
+    // Initialize charts
+    setTimeout(function() {
+        createStatusChart();
+        createMonthlyChart();
+    }, 100);
+    
+    // Animation for cards
+    const cards = document.querySelectorAll('.stat-card, .chart-card, .theses-card, .submissions-card');
+    const observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                entry.target.style.opacity = '1';
+                entry.target.style.transform = 'translateY(0)';
+                observer.unobserve(entry.target);
+            }
+        });
+    }, { threshold: 0.1 });
+    
+    cards.forEach(card => {
+        card.style.opacity = '0';
+        card.style.transform = 'translateY(20px)';
+        card.style.transition = 'opacity 0.5s ease, transform 0.5s ease';
+        observer.observe(card);
+    });
 });

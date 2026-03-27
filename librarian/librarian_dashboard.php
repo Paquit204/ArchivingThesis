@@ -33,24 +33,111 @@ if ($check_table && $check_table->num_rows > 0) {
     $notif_stmt->close();
 }
 
-// Statistics data
+// Check if theses table exists
+$theses_table_exists = false;
+$check_theses = $conn->query("SHOW TABLES LIKE 'theses'");
+if ($check_theses && $check_theses->num_rows > 0) {
+    $theses_table_exists = true;
+}
+
+// Get real statistics from database
 $stats = [
-    'total_faculty' => 28,
-    'total_students' => 342,
-    'active_projects' => 87,
+    'total_faculty' => 0,
+    'total_students' => 0,
+    'active_projects' => 0,
     'upcoming_defenses' => 4,
-    'pending_reviews' => 23,
-    'approved_this_sem' => 15
+    'pending_reviews' => 0,
+    'approved_this_sem' => 0
 ];
 
-// Faculty workload data
-$faculty_workload = [
-    ['name' => 'Dr. Maria Santos', 'projects' => 10, 'initials' => 'MS'],
-    ['name' => 'Prof. Juan Cruz', 'projects' => 9, 'initials' => 'JC'],
-    ['name' => 'Dr. Ana Reyes', 'projects' => 8, 'initials' => 'AR'],
-    ['name' => 'Prof. Pedro Garcia', 'projects' => 7, 'initials' => 'PG'],
-    ['name' => 'Dr. Lisa Villanueva', 'projects' => 6, 'initials' => 'LV']
-];
+// Get total faculty
+$faculty_query = "SELECT COUNT(*) as count FROM user_table WHERE role_id = 3 AND status = 'Active'";
+$faculty_result = $conn->query($faculty_query);
+$stats['total_faculty'] = ($faculty_result && $faculty_result->num_rows > 0) ? ($faculty_result->fetch_assoc())['count'] : 28;
+
+// Get total students
+$students_query = "SELECT COUNT(*) as count FROM user_table WHERE role_id = 2 AND status = 'Active'";
+$students_result = $conn->query($students_query);
+$stats['total_students'] = ($students_result && $students_result->num_rows > 0) ? ($students_result->fetch_assoc())['count'] : 342;
+
+// Get theses statistics ONLY IF TABLE EXISTS
+if ($theses_table_exists) {
+    // Active projects
+    $active_query = "SELECT COUNT(*) as count FROM theses WHERE status = 'In Progress' OR status = 'Ongoing'";
+    $active_result = $conn->query($active_query);
+    $stats['active_projects'] = ($active_result && $active_result->num_rows > 0) ? ($active_result->fetch_assoc())['count'] : 87;
+    
+    // Pending reviews
+    $pending_query = "SELECT COUNT(*) as count FROM theses WHERE status = 'Pending' OR status = 'For Review'";
+    $pending_result = $conn->query($pending_query);
+    $stats['pending_reviews'] = ($pending_result && $pending_result->num_rows > 0) ? ($pending_result->fetch_assoc())['count'] : 23;
+    
+    // Approved this semester
+    $approved_query = "SELECT COUNT(*) as count FROM theses WHERE status = 'Approved'";
+    $approved_result = $conn->query($approved_query);
+    $stats['approved_this_sem'] = ($approved_result && $approved_result->num_rows > 0) ? ($approved_result->fetch_assoc())['count'] : 15;
+} else {
+    // Use sample data if theses table doesn't exist
+    $stats['active_projects'] = 87;
+    $stats['pending_reviews'] = 23;
+    $stats['approved_this_sem'] = 15;
+}
+
+// Get faculty workload from database (only if theses table exists)
+$faculty_workload = [];
+
+if ($theses_table_exists) {
+    // Check if faculty_adviser_id column exists
+    $check_advisor_column = $conn->query("SHOW COLUMNS FROM theses LIKE 'faculty_adviser_id'");
+    if ($check_advisor_column && $check_advisor_column->num_rows > 0) {
+        $workload_query = "SELECT u.user_id, CONCAT(u.first_name, ' ', u.last_name) as name, COUNT(t.thesis_id) as workload 
+                           FROM user_table u 
+                           LEFT JOIN theses t ON t.faculty_adviser_id = u.user_id 
+                           WHERE u.role_id = 3 AND u.status = 'Active' 
+                           GROUP BY u.user_id 
+                           ORDER BY workload DESC 
+                           LIMIT 5";
+        $workload_result = $conn->query($workload_query);
+        if ($workload_result && $workload_result->num_rows > 0) {
+            while ($row = $workload_result->fetch_assoc()) {
+                $faculty_workload[] = [
+                    'name' => $row['name'],
+                    'projects' => $row['workload'],
+                    'initials' => strtoupper(substr($row['name'], 0, 1) . substr(explode(' ', $row['name'])[1] ?? '', 0, 1))
+                ];
+            }
+        }
+    }
+}
+
+// If no workload data, use sample
+if (empty($faculty_workload)) {
+    $faculty_workload = [
+        ['name' => 'Dr. Maria Santos', 'projects' => 10, 'initials' => 'MS'],
+        ['name' => 'Prof. Juan Cruz', 'projects' => 9, 'initials' => 'JC'],
+        ['name' => 'Dr. Ana Reyes', 'projects' => 8, 'initials' => 'AR'],
+        ['name' => 'Prof. Pedro Garcia', 'projects' => 7, 'initials' => 'PG'],
+        ['name' => 'Dr. Lisa Villanueva', 'projects' => 6, 'initials' => 'LV']
+    ];
+}
+
+// Monthly data for chart
+$monthly_data = [3, 5, 8, 6, 9, 11, 12, 10, 16, 15, 18, 22];
+$months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+if ($theses_table_exists) {
+    $monthly_query = "SELECT MONTH(created_at) as month, COUNT(*) as count FROM theses WHERE YEAR(created_at) = YEAR(CURDATE()) GROUP BY MONTH(created_at)";
+    $monthly_result = $conn->query($monthly_query);
+    $monthly_counts = array_fill(1, 12, 0);
+    if ($monthly_result && $monthly_result->num_rows > 0) {
+        while ($row = $monthly_result->fetch_assoc()) {
+            $monthly_counts[(int)$row['month']] = (int)$row['count'];
+        }
+        if (array_sum($monthly_counts) > 0) {
+            $monthly_data = array_values($monthly_counts);
+        }
+    }
+}
 
 // Recent activities
 $recent_activities = [
@@ -205,11 +292,33 @@ $pageTitle = "Librarian Dashboard";
                 <div class="chart-container">
                     <canvas id="statusChart"></canvas>
                 </div>
+                <div class="status-labels">
+                    <div class="status-label-item">
+                        <span class="status-color pending"></span>
+                        <span>Pending Review (<?= $stats['pending_reviews'] ?>)</span>
+                    </div>
+                    <div class="status-label-item">
+                        <span class="status-color forwarded"></span>
+                        <span>Forwarded to Dean (15)</span>
+                    </div>
+                    <div class="status-label-item">
+                        <span class="status-color rejected"></span>
+                        <span>Rejected (8)</span>
+                    </div>
+                </div>
             </div>
             <div class="chart-card">
                 <h3><i class="fas fa-chart-line"></i> Monthly Thesis Submissions</h3>
                 <div class="chart-container">
                     <canvas id="monthlyChart"></canvas>
+                </div>
+                <div class="monthly-stats">
+                    <?php for ($i = 0; $i < 12; $i++): ?>
+                    <div class="month-item">
+                        <span class="month-name"><?= $months[$i] ?>:</span>
+                        <span class="month-count"><?= $monthly_data[$i] ?></span>
+                    </div>
+                    <?php endfor; ?>
                 </div>
             </div>
         </div>
@@ -250,6 +359,17 @@ $pageTitle = "Librarian Dashboard";
         </div>
     </main>
 
+    <script>
+        window.chartData = {
+            status: {
+                pending: <?= $stats['pending_reviews'] ?>,
+                forwarded: 15,
+                rejected: 8
+            },
+            monthly: <?= json_encode($monthly_data) ?>,
+            months: <?= json_encode($months) ?>
+        };
+    </script>
     <script src="js/librarian_dashboard.js"></script>
 </body>
 </html>

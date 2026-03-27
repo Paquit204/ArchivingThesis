@@ -2,13 +2,17 @@
     margin: 0;
     padding: 0;
     box-sizing: border-box;
-    font-family: 'Inter', sans-serif;
 }
 
 body {
-    background-color: #f8f9fa;
-    height: 100vh;
-    overflow: hidden;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+    background: #f5f7fb;
+    color: #1e293b;
+}
+
+body.dark-mode {
+    background: #0f172a;
+    color: #e5e7eb;
 }
 
 /* Top Navigation Bar */
@@ -239,6 +243,16 @@ body.dark-mode .notification-icon {
     font-weight: 600;
 }
 
+.notification-badge-sidebar {
+    margin-left: auto;
+    background: #ffcdd2;
+    color: #d32f2f;
+    font-size: 0.7rem;
+    padding: 2px 6px;
+    border-radius: 10px;
+    font-weight: 600;
+}
+
 /* Sidebar Overlay */
 .sidebar-overlay {
     position: fixed;
@@ -460,17 +474,17 @@ body.dark-mode .main-content {
     opacity: 0.9;
 }
 
-.coordinator-info {
+.faculty-info {
     text-align: right;
 }
 
-.coordinator-name {
+.faculty-name {
     font-size: 1rem;
     font-weight: 600;
     margin-bottom: 5px;
 }
 
-.coordinator-since {
+.faculty-since {
     font-size: 0.8rem;
     opacity: 0.8;
 }
@@ -478,7 +492,7 @@ body.dark-mode .main-content {
 /* Stats Grid */
 .stats-grid {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(4, 1fr);
     gap: 20px;
     margin-bottom: 25px;
 }
@@ -530,120 +544,6 @@ body.dark-mode .stat-card {
     font-weight: 500;
 }
 
-/* Charts Row */
-.charts-row {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 20px;
-    margin-bottom: 25px;
-}
-
-.chart-card {
-    background: white;
-    border-radius: 16px;
-    padding: 20px;
-    border: 1px solid #ffcdd2;
-}
-
-body.dark-mode .chart-card {
-    background: #1e293b;
-    border-color: #334155;
-}
-
-.chart-card h3 {
-    font-size: 1rem;
-    font-weight: 600;
-    margin-bottom: 15px;
-    color: #333333;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
-body.dark-mode .chart-card h3 {
-    color: #e5e7eb;
-}
-
-.chart-card h3 i {
-    color: #d32f2f;
-}
-
-.chart-container {
-    height: 220px;
-    position: relative;
-}
-
-/* Status Labels */
-.status-labels {
-    display: flex;
-    justify-content: center;
-    gap: 20px;
-    margin-top: 15px;
-    padding-top: 10px;
-    border-top: 1px solid #e2e8f0;
-}
-
-body.dark-mode .status-labels {
-    border-top-color: #334155;
-}
-
-.status-label-item {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 0.75rem;
-    color: #64748b;
-}
-
-.status-color {
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    display: inline-block;
-}
-
-.status-color.pending {
-    background: #f59e0b;
-}
-
-.status-color.forwarded {
-    background: #10b981;
-}
-
-.status-color.rejected {
-    background: #ef4444;
-}
-
-/* Monthly Stats */
-.monthly-stats {
-    display: grid;
-    grid-template-columns: repeat(6, 1fr);
-    gap: 5px;
-    margin-top: 15px;
-    padding-top: 10px;
-    border-top: 1px solid #e2e8f0;
-}
-
-body.dark-mode .monthly-stats {
-    border-top-color: #334155;
-}
-
-.month-item {
-    display: flex;
-    justify-content: space-between;
-    font-size: 0.7rem;
-    padding: 3px 5px;
-}
-
-.month-name {
-    color: #64748b;
-}
-
-.month-count {
-    color: #d32f2f;
-    font-weight: 600;
-}
-
 /* Theses Card */
 .theses-card, .submissions-card {
     background: white;
@@ -666,6 +566,8 @@ body.dark-mode .submissions-card {
     margin-bottom: 20px;
     padding-bottom: 10px;
     border-bottom: 1px solid #ffebee;
+    flex-wrap: wrap;
+    gap: 15px;
 }
 
 .card-header h3 {
@@ -698,27 +600,40 @@ body.dark-mode .card-header h3 {
     gap: 8px;
 }
 
-.search-area-small {
+/* Filter Tabs */
+.filter-tabs {
     display: flex;
-    align-items: center;
-    background: #f8f9fa;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.filter-btn {
     padding: 6px 12px;
+    background: #f8f9fa;
     border-radius: 20px;
+    text-decoration: none;
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: #64748b;
+    transition: all 0.3s;
     border: 1px solid #ffcdd2;
 }
 
-.search-area-small i {
-    color: #d32f2f;
-    font-size: 0.8rem;
-    margin-right: 8px;
+body.dark-mode .filter-btn {
+    background: #334155;
+    color: #94a3b8;
+    border-color: #475569;
 }
 
-.search-area-small input {
-    border: none;
-    background: transparent;
-    outline: none;
-    font-size: 0.8rem;
-    width: 180px;
+.filter-btn.active {
+    background: #d32f2f;
+    color: white;
+    border-color: #d32f2f;
+}
+
+.filter-btn:hover:not(.active) {
+    background: #ffebee;
+    color: #d32f2f;
 }
 
 /* Theses List */
@@ -834,6 +749,15 @@ body.dark-mode .theses-table td {
     color: #e5e7eb;
 }
 
+.theses-table tr:hover td {
+    background: #ffebee;
+}
+
+body.dark-mode .theses-table tr:hover td {
+    background: #334155;
+}
+
+/* Status Badges */
 .status-badge {
     display: inline-block;
     padding: 4px 10px;
@@ -842,35 +766,54 @@ body.dark-mode .theses-table td {
     font-weight: 600;
 }
 
-.status-badge.pending_coordinator {
+.status-badge.status-pending {
     background: #fff3e0;
     color: #ed6c02;
 }
 
-.status-badge.forwarded_to_dean {
+.status-badge.status-approved {
     background: #e8f5e9;
     color: #2e7d32;
 }
 
-.status-badge.rejected {
+.status-badge.status-rejected {
     background: #ffebee;
     color: #c62828;
 }
 
-.btn-view {
+.status-badge.status-archived {
+    background: #eceff1;
+    color: #546e7a;
+}
+
+/* Action Buttons */
+.btn-review-small, .btn-view-small {
     padding: 5px 12px;
-    background: #ffebee;
     border-radius: 6px;
     text-decoration: none;
-    color: #d32f2f;
     font-size: 0.75rem;
+    font-weight: 500;
     transition: all 0.3s;
     display: inline-flex;
     align-items: center;
     gap: 5px;
 }
 
-.btn-view:hover {
+.btn-review-small {
+    background: #d32f2f;
+    color: white;
+}
+
+.btn-review-small:hover {
+    background: #b71c1c;
+}
+
+.btn-view-small {
+    background: #ffebee;
+    color: #d32f2f;
+}
+
+.btn-view-small:hover {
     background: #ffcdd2;
 }
 
@@ -879,20 +822,11 @@ body.dark-mode .theses-table td {
     .stats-grid {
         grid-template-columns: repeat(2, 1fr);
     }
-    .charts-row {
-        grid-template-columns: 1fr;
-    }
-    .monthly-stats {
-        grid-template-columns: repeat(4, 1fr);
-    }
 }
 
 @media (max-width: 768px) {
     .stats-grid {
         grid-template-columns: 1fr;
-    }
-    .monthly-stats {
-        grid-template-columns: repeat(3, 1fr);
     }
     
     .top-nav {
@@ -923,13 +857,12 @@ body.dark-mode .theses-table td {
         gap: 15px;
     }
     
-    .coordinator-info {
+    .faculty-info {
         text-align: center;
     }
     
     .card-header {
         flex-direction: column;
-        gap: 15px;
         align-items: flex-start;
     }
     
@@ -937,5 +870,9 @@ body.dark-mode .theses-table td {
         flex-direction: column;
         text-align: center;
         gap: 10px;
+    }
+    
+    .filter-tabs {
+        justify-content: center;
     }
 }
