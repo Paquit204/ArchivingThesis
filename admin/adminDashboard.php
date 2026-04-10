@@ -128,20 +128,40 @@ $logs_count = $conn->query("SELECT COUNT(*) as c FROM audit_logs")->fetch_assoc(
 
 // GET THESES COUNT
 $theses_count = 0;
-$check_theses_table = $conn->query("SHOW TABLES LIKE 'theses'");
+$check_theses_table = $conn->query("SHOW TABLES LIKE 'thesis_table'");
 if ($check_theses_table && $check_theses_table->num_rows > 0) {
-    $theses_count = $conn->query("SELECT COUNT(*) as c FROM theses")->fetch_assoc()['c'];
+    $theses_count = $conn->query("SELECT COUNT(*) as c FROM thesis_table")->fetch_assoc()['c'];
 }
 
+// ==================== NOTIFICATION SYSTEM - FIXED (using 'status' instead of 'is_read') ====================
+// Create notifications table if not exists
+$conn->query("CREATE TABLE IF NOT EXISTS notifications (
+    notification_id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    thesis_id INT NULL,
+    message TEXT NOT NULL,
+    type VARCHAR(50) DEFAULT 'info',
+    link VARCHAR(255) NULL,
+    status TINYINT DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX (user_id),
+    INDEX (status)
+)");
+
+// GET NOTIFICATION COUNT - using 'status' instead of 'is_read'
 $notificationCount = 0;
 $notif_check = $conn->query("SHOW TABLES LIKE 'notifications'");
-if ($notif_check && $notif_check->num_rows) {
-    $n = $conn->prepare("SELECT COUNT(*) as c FROM notifications WHERE user_id = ? AND is_read = 0");
+if ($notif_check && $notif_check->num_rows > 0) {
+    $n = $conn->prepare("SELECT COUNT(*) as c FROM notifications WHERE user_id = ? AND status = 0");
     $n->bind_param("i", $user_id);
     $n->execute();
-    $notificationCount = $n->get_result()->fetch_assoc()['c'];
+    $result = $n->get_result();
+    if ($row = $result->fetch_assoc()) {
+        $notificationCount = $row['c'];
+    }
     $n->close();
 }
+
 $conn->close();
 ?>
 <!DOCTYPE html>

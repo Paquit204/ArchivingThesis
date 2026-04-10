@@ -15,11 +15,9 @@ if (!isset($_SESSION["user_id"])) {
 $archiveManager = new ArchiveManager($conn);
 $user_id = (int)$_SESSION["user_id"];
 
-// Get or create student ID
-$student_id = getStudentId($conn, $user_id);
-
 // Get user data
 $user = getUserData($conn, $user_id);
+
 if (!$user) {
     session_destroy();
     header("Location: /ArchivingThesis/authentication/login.php");
@@ -39,7 +37,7 @@ $successMessage = "";
 $formErrors = [];
 
 if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST['submit_thesis'])) {
-    $result = handleThesisSubmission($conn, $user_id, $student_id, $first, $last, $_POST, $_FILES);
+    $result = handleThesisSubmission($conn, $user_id, $first, $last, $_POST, $_FILES);
     
     if ($result['success']) {
         $_SESSION['submission_success'] = $result['message'];
@@ -57,7 +55,7 @@ if (isset($_SESSION['submission_success'])) {
 }
 
 // Get recent submissions
-$recentSubmissions = getRecentSubmissions($conn, $student_id);
+$recentSubmissions = getRecentSubmissions($conn, $user_id);
 
 $pageTitle = "Submit Thesis";
 ?>

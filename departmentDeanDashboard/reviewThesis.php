@@ -28,14 +28,11 @@ $thesis_abstract = 'No abstract available.';
 $thesis_file = '';
 $thesis_date = '';
 $thesis_status = '';
-$submitted_by = '';
-$coordinator_name = '';
+$student_id = 0;
+$adviser_name = '';
 
 if ($thesis_id > 0) {
-    $thesis_query = "SELECT t.*, u.first_name, u.last_name, u.email 
-                     FROM theses t
-                     JOIN user_table u ON t.submitted_by = u.user_id
-                     WHERE t.thesis_id = ?";
+    $thesis_query = "SELECT * FROM thesis_table WHERE thesis_id = ?";
     $thesis_stmt = $conn->prepare($thesis_query);
     $thesis_stmt->bind_param("i", $thesis_id);
     $thesis_stmt->execute();
@@ -43,98 +40,161 @@ if ($thesis_id > 0) {
     if ($thesis_row = $thesis_result->fetch_assoc()) {
         $thesis = $thesis_row;
         $thesis_title = $thesis_row['title'];
-        $thesis_author = $thesis_row['author'] ?? ($thesis_row['first_name'] . ' ' . $thesis_row['last_name']);
+        $thesis_author = $thesis_row['adviser'] ?? 'Unknown Author';
         $thesis_abstract = $thesis_row['abstract'] ?? 'No abstract available.';
         $thesis_file = $thesis_row['file_path'] ?? '';
-        $thesis_date = isset($thesis_row['created_at']) ? date('M d, Y', strtotime($thesis_row['created_at'])) : date('M d, Y');
+        $thesis_date = isset($thesis_row['date_submitted']) ? date('M d, Y', strtotime($thesis_row['date_submitted'])) : date('M d, Y');
         $thesis_status = $thesis_row['status'] ?? 'pending';
-        $submitted_by = $thesis_row['submitted_by'];
+        $student_id = $thesis_row['student_id'] ?? 0;
+        $adviser_name = $thesis_row['adviser'] ?? '';
     }
     $thesis_stmt->close();
 }
 
 // Get coordinator name who forwarded this thesis
-$coordinator_query = "SELECT message FROM notifications WHERE thesis_id = ? AND type = 'dean_forward' ORDER BY created_at DESC LIMIT 1";
+$coordinator_name = '';
+$coordinator_query = "SELECT message FROM notifications WHERE thesis_id = ? AND type LIKE '%forward%' ORDER BY created_at DESC LIMIT 1";
 $coordinator_stmt = $conn->prepare($coordinator_query);
 $coordinator_stmt->bind_param("i", $thesis_id);
 $coordinator_stmt->execute();
 $coordinator_result = $coordinator_stmt->get_result();
 if ($coordinator_row = $coordinator_result->fetch_assoc()) {
-    // Extract coordinator name from message
     $msg = $coordinator_row['message'];
-    if (preg_match('/by Coordinator (.+?)\./', $msg, $matches)) {
-        $coordinator_name = $matches[1];
+    if (preg_match('/by (.+?)(\.|$)/', $msg, $matches)) {
+        $coordinator_name = trim($matches[1]);
     }
 }
 $coordinator_stmt->close();
 
-// Process form submission - Approve Thesis (for Dean)
+// ==================== FUNCTION TO NOTIFY LIBRARIAN ====================
+function notifyLibrarian($conn, $thesis_id, $thesis_title, $student_name, $dean_name) {
+    // Get all librarians (role_id = 5)
+    $lib_query = "SELECT user_id FROM user_table WHERE role_id = 5";
+    $lib_result = $conn->query($lib_query);
+    
+    if (!$lib_result || $lib_result->num_rows == 0) {
+        error_log("No librarian found with role_id = 5");
+        return false;
+    }
+    
+    $notified = false;
+    while ($librarian = $lib_result->fetch_assoc()) {
+        $librarian_id = $librarian['user_id'];
+        $message = "📚 Thesis approved by Dean for archiving: \"" . $thesis_title . "\" from student " . $student_name . ". Approved by Dean: " . $dean_name;
+        $link = "../librarian/archiveThesis.php?id=" . $thesis_id;
+        
+        $insert_sql = "INSERT INTO notifications (user_id, thesis_id, message, type, link, status, created_at) 
+                       VALUES ($librarian_id, $thesis_id, '$message', 'dean_approved', '$link', 0, NOW())";
+        
+        if ($conn->query($insert_sql)) {
+            $notified = true;
+            error_log("Notification sent to librarian ID: $librarian_id");
+        }
+    }
+    return $notified;
+}
+
+// Process form submission - Approve Thesis
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['approve_thesis'])) {
     $thesis_id_post = intval($_POST['thesis_id']);
     $dean_feedback = isset($_POST['dean_feedback']) ? trim($_POST['dean_feedback']) : '';
     
     // Update thesis status to 'approved'
-    $update_query = "UPDATE theses SET status = 'approved', dean_feedback = ? WHERE thesis_id = ?";
+    $update_query = "UPDATE thesis_table SET status = 'approved' WHERE thesis_id = ?";
     $update_stmt = $conn->prepare($update_query);
-    $update_stmt->bind_param("si", $dean_feedback, $thesis_id_post);
+    $update_stmt->bind_param("i", $thesis_id_post);
     $update_stmt->execute();
     $update_stmt->close();
     
-    // Notify Coordinator and Faculty
-    $notifMessage = "✅ Thesis \"" . $thesis_title . "\" has been APPROVED by Dean " . $fullName;
-    
-    // Notify Coordinator
-    $coord_notif = "INSERT INTO notifications (user_id, thesis_id, message, type, is_read, created_at) VALUES (?, ?, ?, 'dean_approved', 0, NOW())";
-    $coord_stmt = $conn->prepare($coord_notif);
-    $coord_stmt->bind_param("iis", $user_id, $thesis_id_post, $notifMessage);
-    $coord_stmt->execute();
-    $coord_stmt->close();
-    
-    // Notify Faculty (submitted_by)
-    if ($submitted_by) {
-        $faculty_notif = "INSERT INTO notifications (user_id, thesis_id, message, type, is_read, created_at) VALUES (?, ?, ?, 'dean_approved', 0, NOW())";
-        $faculty_stmt = $conn->prepare($faculty_notif);
-        $faculty_stmt->bind_param("iis", $submitted_by, $thesis_id_post, $notifMessage);
-        $faculty_stmt->execute();
-        $faculty_stmt->close();
+    // 1. NOTIFY STUDENT
+    if ($student_id > 0) {
+        $student_msg = "✅ Good news! Your thesis \"" . $thesis_title . "\" has been APPROVED by Dean " . $fullName;
+        if (!empty($dean_feedback)) {
+            $student_msg .= " Feedback: " . $dean_feedback;
+        }
+        $notif_student = "INSERT INTO notifications (user_id, thesis_id, message, type, status, created_at) VALUES ($student_id, $thesis_id_post, '$student_msg', 'student_approved', 0, NOW())";
+        $conn->query($notif_student);
     }
     
-    header("Location: dean.php?msg=approved");
+    // 2. NOTIFY ADVISER
+    if (!empty($adviser_name)) {
+        $get_adviser = "SELECT user_id FROM user_table WHERE CONCAT(first_name, ' ', last_name) = ? AND role_id = 3";
+        $adviser_stmt = $conn->prepare($get_adviser);
+        $adviser_stmt->bind_param("s", $adviser_name);
+        $adviser_stmt->execute();
+        $adviser_result = $adviser_stmt->get_result();
+        if ($adviser_row = $adviser_result->fetch_assoc()) {
+            $adviser_id = $adviser_row['user_id'];
+            $adviser_msg = "✅ Thesis \"" . $thesis_title . "\" has been APPROVED by Dean " . $fullName;
+            if (!empty($dean_feedback)) {
+                $adviser_msg .= " Feedback: " . $dean_feedback;
+            }
+            $notif_adviser = "INSERT INTO notifications (user_id, thesis_id, message, type, status, created_at) VALUES ($adviser_id, $thesis_id_post, '$adviser_msg', 'dean_approved', 0, NOW())";
+            $conn->query($notif_adviser);
+        }
+        $adviser_stmt->close();
+    }
+    
+    // 3. NOTIFY LIBRARIAN
+    $student_name = $thesis['student_name'] ?? $thesis_author;
+    notifyLibrarian($conn, $thesis_id_post, $thesis_title, $student_name, $fullName);
+    
+    // 4. NOTIFY DEAN (history)
+    $dean_msg = "✅ You approved thesis \"" . $thesis_title . "\" and forwarded to Librarian";
+    $notif_dean = "INSERT INTO notifications (user_id, thesis_id, message, type, status, created_at) VALUES ($user_id, $thesis_id_post, '$dean_msg', 'dean_action', 0, NOW())";
+    $conn->query($notif_dean);
+    
+    header("Location: dean.php?section=dashboard&msg=approved");
     exit;
 }
 
-// Process form submission - Reject Thesis (for Dean)
+// Process form submission - Reject Thesis
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['reject_thesis'])) {
     $thesis_id_post = intval($_POST['thesis_id']);
     $dean_feedback = isset($_POST['dean_feedback']) ? trim($_POST['dean_feedback']) : '';
     
     // Update thesis status to 'rejected'
-    $update_query = "UPDATE theses SET status = 'rejected', dean_feedback = ? WHERE thesis_id = ?";
+    $update_query = "UPDATE thesis_table SET status = 'rejected' WHERE thesis_id = ?";
     $update_stmt = $conn->prepare($update_query);
-    $update_stmt->bind_param("si", $dean_feedback, $thesis_id_post);
+    $update_stmt->bind_param("i", $thesis_id_post);
     $update_stmt->execute();
     $update_stmt->close();
     
-    // Notify Coordinator and Faculty
-    $notifMessage = "❌ Thesis \"" . $thesis_title . "\" has been REJECTED by Dean " . $fullName . ". Reason: " . $dean_feedback;
-    
-    // Notify Coordinator
-    $coord_notif = "INSERT INTO notifications (user_id, thesis_id, message, type, is_read, created_at) VALUES (?, ?, ?, 'dean_rejected', 0, NOW())";
-    $coord_stmt = $conn->prepare($coord_notif);
-    $coord_stmt->bind_param("iis", $user_id, $thesis_id_post, $notifMessage);
-    $coord_stmt->execute();
-    $coord_stmt->close();
-    
-    // Notify Faculty
-    if ($submitted_by) {
-        $faculty_notif = "INSERT INTO notifications (user_id, thesis_id, message, type, is_read, created_at) VALUES (?, ?, ?, 'dean_rejected', 0, NOW())";
-        $faculty_stmt = $conn->prepare($faculty_notif);
-        $faculty_stmt->bind_param("iis", $submitted_by, $thesis_id_post, $notifMessage);
-        $faculty_stmt->execute();
-        $faculty_stmt->close();
+    // 1. NOTIFY STUDENT
+    if ($student_id > 0) {
+        $student_msg = "❌ Your thesis \"" . $thesis_title . "\" has been REJECTED by Dean " . $fullName;
+        if (!empty($dean_feedback)) {
+            $student_msg .= " Reason: " . $dean_feedback;
+        }
+        $notif_student = "INSERT INTO notifications (user_id, thesis_id, message, type, status, created_at) VALUES ($student_id, $thesis_id_post, '$student_msg', 'student_rejected', 0, NOW())";
+        $conn->query($notif_student);
     }
     
-    header("Location: dean.php?msg=rejected");
+    // 2. NOTIFY ADVISER
+    if (!empty($adviser_name)) {
+        $get_adviser = "SELECT user_id FROM user_table WHERE CONCAT(first_name, ' ', last_name) = ? AND role_id = 3";
+        $adviser_stmt = $conn->prepare($get_adviser);
+        $adviser_stmt->bind_param("s", $adviser_name);
+        $adviser_stmt->execute();
+        $adviser_result = $adviser_stmt->get_result();
+        if ($adviser_row = $adviser_result->fetch_assoc()) {
+            $adviser_id = $adviser_row['user_id'];
+            $adviser_msg = "❌ Thesis \"" . $thesis_title . "\" has been REJECTED by Dean " . $fullName;
+            if (!empty($dean_feedback)) {
+                $adviser_msg .= " Reason: " . $dean_feedback;
+            }
+            $notif_adviser = "INSERT INTO notifications (user_id, thesis_id, message, type, status, created_at) VALUES ($adviser_id, $thesis_id_post, '$adviser_msg', 'dean_rejected', 0, NOW())";
+            $conn->query($notif_adviser);
+        }
+        $adviser_stmt->close();
+    }
+    
+    // 3. NOTIFY DEAN (history)
+    $dean_msg = "❌ You rejected thesis \"" . $thesis_title . "\"";
+    $notif_dean = "INSERT INTO notifications (user_id, thesis_id, message, type, status, created_at) VALUES ($user_id, $thesis_id_post, '$dean_msg', 'dean_action', 0, NOW())";
+    $conn->query($notif_dean);
+    
+    header("Location: dean.php?section=dashboard&msg=rejected");
     exit;
 }
 
@@ -155,7 +215,6 @@ $currentPage = basename($_SERVER['PHP_SELF']);
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: 'Inter', sans-serif; background: #fef2f2; color: #1f2937; overflow-x: hidden; }
         
-        /* Top Navigation */
         .top-nav {
             position: fixed; top: 0; right: 0; left: 0; height: 70px;
             background: white; display: flex; align-items: center;
@@ -176,7 +235,6 @@ $currentPage = basename($_SERVER['PHP_SELF']);
         .search-area input { border: none; background: none; outline: none; font-size: 0.85rem; width: 200px; }
         .nav-right { display: flex; align-items: center; gap: 20px; position: relative; }
         
-        /* Profile */
         .profile-wrapper { position: relative; }
         .profile-trigger { display: flex; align-items: center; gap: 12px; cursor: pointer; padding: 5px 0; }
         .profile-name { font-weight: 500; color: #1f2937; font-size: 0.9rem; }
@@ -192,7 +250,6 @@ $currentPage = basename($_SERVER['PHP_SELF']);
         
         @keyframes fadeSlideDown { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
         
-        /* Sidebar */
         .sidebar { position: fixed; top: 0; left: -300px; width: 280px; height: 100%;
             background: linear-gradient(180deg, #991b1b 0%, #dc2626 100%); display: flex;
             flex-direction: column; z-index: 1000; transition: left 0.3s ease; box-shadow: 2px 0 10px rgba(0,0,0,0.05); }
@@ -260,7 +317,7 @@ $currentPage = basename($_SERVER['PHP_SELF']);
         .status-badge { display: inline-block; padding: 6px 14px; border-radius: 30px;
             font-size: 0.75rem; font-weight: 600; margin-bottom: 20px; }
         .status-pending { background: #fef3c7; color: #d97706; }
-        .status-forwarded { background: #dbeafe; color: #2563eb; }
+        .status-forwarded_to_dean { background: #dbeafe; color: #2563eb; }
         .status-approved { background: #d1fae5; color: #059669; }
         .status-rejected { background: #fee2e2; color: #dc2626; }
         
@@ -377,10 +434,10 @@ $currentPage = basename($_SERVER['PHP_SELF']);
     <aside class="sidebar" id="sidebar">
         <div class="logo-container"><div class="logo">Thesis<span>Manager</span></div><div class="logo-sub">DEPARTMENT DEAN</div></div>
         <div class="nav-menu">
-            <a href="dean.php" class="nav-item"><i class="fas fa-th-large"></i><span>Dashboard</span></a>
+            <a href="dean.php?section=dashboard" class="nav-item"><i class="fas fa-th-large"></i><span>Dashboard</span></a>
             <a href="reviewThesis.php" class="nav-item active"><i class="fas fa-file-alt"></i><span>Review Theses</span></a>
-            <a href="department.php" class="nav-item"><i class="fas fa-building"></i><span>Department</span></a>
-            <a href="reports.php" class="nav-item"><i class="fas fa-chart-bar"></i><span>Reports</span></a>
+            <a href="dean.php?section=department" class="nav-item"><i class="fas fa-building"></i><span>Department</span></a>
+            <a href="dean.php?section=reports" class="nav-item"><i class="fas fa-chart-bar"></i><span>Reports</span></a>
         </div>
         <div class="nav-footer">
             <div class="theme-toggle"><input type="checkbox" id="darkmode"><label for="darkmode" class="toggle-label"><i class="fas fa-sun"></i><i class="fas fa-moon"></i></label></div>
@@ -391,7 +448,7 @@ $currentPage = basename($_SERVER['PHP_SELF']);
     <main class="main-content">
         <div class="page-header">
             <h2>Review Thesis</h2>
-            <a href="dean.php" class="back-link"><i class="fas fa-arrow-left"></i> Back to Dashboard</a>
+            <a href="dean.php?section=dashboard" class="back-link"><i class="fas fa-arrow-left"></i> Back to Dashboard</a>
         </div>
 
         <?php if (!$thesis): ?>
@@ -399,14 +456,14 @@ $currentPage = basename($_SERVER['PHP_SELF']);
             <div style="text-align: center; padding: 40px;">
                 <i class="fas fa-file-alt" style="font-size: 3rem; color: #dc2626; margin-bottom: 16px;"></i>
                 <h3 style="color: #991b1b;">Thesis Not Found</h3>
-                <p style="color: #6b7280;">The thesis you are looking for does not exist.</p>
-                <a href="dean.php" class="back-link" style="margin-top: 20px;">Go back to Dashboard</a>
+                <p style="color: #6b7280;">The thesis you are looking for does not exist or has been removed.</p>
+                <a href="dean.php?section=dashboard" class="back-link" style="margin-top: 20px;">Go back to Dashboard</a>
             </div>
         </div>
         <?php else: ?>
         
         <div class="thesis-detail-card">
-            <div class="thesis-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <div class="thesis-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 10px;">
                 <h1 class="thesis-title" style="margin-bottom: 0; padding-bottom: 0; border-bottom: none;"><?= htmlspecialchars($thesis_title) ?></h1>
                 <span class="status-badge status-<?= strtolower(str_replace('_', ' ', $thesis_status)) ?>">
                     <?= htmlspecialchars(ucfirst(str_replace('_', ' ', $thesis_status))) ?>
@@ -447,7 +504,7 @@ $currentPage = basename($_SERVER['PHP_SELF']);
             </div>
             <?php else: ?>
             <div class="pdf-viewer">
-                <div class="pdf-error"><i class="fas fa-file-pdf"></i><p>PDF file not found.</p></div>
+                <div class="pdf-error"><i class="fas fa-file-pdf"></i><p>PDF file not found on server.</p></div>
             </div>
             <?php endif; ?>
             <?php else: ?>
@@ -462,13 +519,13 @@ $currentPage = basename($_SERVER['PHP_SELF']);
             <div class="action-card">
                 <div class="action-icon"><i class="fas fa-check-circle"></i></div>
                 <h3>Approve Thesis</h3>
-                <p>Approve this thesis. The coordinator and faculty will be notified of your decision.</p>
-                <button class="btn-approve" onclick="openApproveModal()"><i class="fas fa-check"></i> Approve Thesis</button>
+                <p>Approve this thesis. The student, adviser, and librarian will be notified for archiving.</p>
+                <button class="btn-approve" onclick="openApproveModal()"><i class="fas fa-check"></i> Approve & Forward to Librarian</button>
             </div>
             <div class="action-card">
                 <div class="action-icon"><i class="fas fa-times-circle"></i></div>
                 <h3>Reject Thesis</h3>
-                <p>Reject this thesis and provide feedback. The coordinator and faculty will be notified.</p>
+                <p>Reject this thesis and provide feedback. The student and adviser will be notified.</p>
                 <button class="btn-reject" onclick="openRejectModal()"><i class="fas fa-times"></i> Reject Thesis</button>
             </div>
         </div>
@@ -476,19 +533,19 @@ $currentPage = basename($_SERVER['PHP_SELF']);
         <div class="action-card" style="grid-column: span 2;">
             <div class="action-icon"><i class="fas fa-check-circle"></i></div>
             <h3>Thesis Approved</h3>
-            <p>This thesis has been approved by the Dean.</p>
+            <p>This thesis has been approved by the Dean. The Librarian has been notified for archiving.</p>
         </div>
         <?php elseif ($thesis_status == 'rejected'): ?>
         <div class="action-card" style="grid-column: span 2;">
             <div class="action-icon"><i class="fas fa-times-circle"></i></div>
             <h3>Thesis Rejected</h3>
-            <p>This thesis has been rejected by the Dean.</p>
+            <p>This thesis has been rejected by the Dean. The student has been notified.</p>
         </div>
         <?php else: ?>
         <div class="action-card" style="grid-column: span 2;">
             <div class="action-icon"><i class="fas fa-info-circle"></i></div>
             <h3>Pending Coordinator Review</h3>
-            <p>This thesis is still pending review by the Coordinator.</p>
+            <p>This thesis is still pending review by the Coordinator. Once forwarded, you will be able to review it.</p>
         </div>
         <?php endif; ?>
         
@@ -507,7 +564,7 @@ $currentPage = basename($_SERVER['PHP_SELF']);
                     <input type="hidden" name="approve_thesis" value="1">
                     <div class="form-group">
                         <label>Feedback (Optional)</label>
-                        <textarea name="dean_feedback" rows="3" placeholder="Optional feedback for the faculty and coordinator..."></textarea>
+                        <textarea name="dean_feedback" rows="3" placeholder="Optional feedback for the student and adviser..."></textarea>
                     </div>
                 </div>
                 <div class="modal-footer">

@@ -1,105 +1,7 @@
 <?php
-function getStudentId($conn, $user_id) {
-    error_log("=== STUDENT ID DEBUG ===");
-    error_log("User ID from session: " . $user_id);
-
-    $studentColumns = $conn->query("SHOW COLUMNS FROM student_table");
-    $studentCols = [];
-    while ($col = $studentColumns->fetch_assoc()) {
-        $studentCols[] = $col['Field'];
-    }
-    error_log("Student table columns: " . implode(', ', $studentCols));
-
-    $studentQuery = "SELECT student_id FROM student_table WHERE user_id = ? LIMIT 1";
-    $stmt = $conn->prepare($studentQuery);
-    $stmt->bind_param("i", $user_id);
-    $stmt->execute();
-    $studentResult = $stmt->get_result();
-    $studentData = $studentResult->fetch_assoc();
-    $stmt->close();
-
-    if (!$studentData) {
-        error_log("No student record found for user_id: " . $user_id);
-        $student_id = createStudentRecord($conn, $user_id, $studentCols);
-    } else {
-        $student_id = $studentData['student_id'];
-        error_log("Found existing student record with ID: " . $student_id);
-    }
-
-    error_log("Final student_id to use: " . $student_id);
-    error_log("=== END STUDENT ID DEBUG ===");
-    
-    return $student_id;
-}
-
-function createStudentRecord($conn, $user_id, $studentCols) {
-    $userQuery = "SELECT * FROM user_table WHERE user_id = ? LIMIT 1";
-    $stmt = $conn->prepare($userQuery);
-    $stmt->bind_param("i", $user_id);
-    $stmt->execute();
-    $userResult = $stmt->get_result();
-    $userData = $userResult->fetch_assoc();
-    $stmt->close();
-    
-    if ($userData) {
-        error_log("User data found: " . json_encode($userData));
-        
-        $insertFields = ['user_id'];
-        $insertValues = [$user_id];
-        $paramTypes = "i";
-        
-        if (in_array('first_name', $studentCols) && isset($userData['first_name'])) {
-            $insertFields[] = 'first_name';
-            $insertValues[] = $userData['first_name'];
-            $paramTypes .= "s";
-        }
-        
-        if (in_array('last_name', $studentCols) && isset($userData['last_name'])) {
-            $insertFields[] = 'last_name';
-            $insertValues[] = $userData['last_name'];
-            $paramTypes .= "s";
-        }
-        
-        if (in_array('email', $studentCols) && isset($userData['email'])) {
-            $insertFields[] = 'email';
-            $insertValues[] = $userData['email'];
-            $paramTypes .= "s";
-        }
-        
-        $placeholders = implode(', ', array_fill(0, count($insertValues), '?'));
-        $insertStudent = "INSERT INTO student_table (" . implode(', ', $insertFields) . ") VALUES ($placeholders)";
-        
-        error_log("Insert student query: " . $insertStudent);
-        
-        $stmt = $conn->prepare($insertStudent);
-        if ($stmt) {
-            $stmt->bind_param($paramTypes, ...$insertValues);
-            
-            if ($stmt->execute()) {
-                $student_id = $stmt->insert_id;
-                error_log("Created new student record with ID: " . $student_id);
-            } else {
-                error_log("Failed to insert student record: " . $stmt->error);
-                $student_id = $user_id;
-                error_log("Using user_id as fallback: " . $student_id);
-            }
-            $stmt->close();
-        } else {
-            error_log("Failed to prepare student insert: " . $conn->error);
-            $student_id = $user_id;
-            error_log("Using user_id as fallback: " . $student_id);
-        }
-    } else {
-        error_log("No user data found for user_id: " . $user_id);
-        $student_id = $user_id;
-        error_log("Using user_id as fallback: " . $student_id);
-    }
-    
-    return $student_id;
-}
 
 function getUserData($conn, $user_id) {
-    $stmt = $conn->prepare("SELECT first_name, last_name FROM user_table WHERE user_id = ? LIMIT 1");
+    $stmt = $conn->prepare("SELECT first_name, last_name, email, department FROM user_table WHERE user_id = ? LIMIT 1");
     $stmt->bind_param("i", $user_id);
     $stmt->execute();
     $user = $stmt->get_result()->fetch_assoc();
@@ -107,9 +9,44 @@ function getUserData($conn, $user_id) {
     return $user;
 }
 
+function getOrCreateStudentId($conn, $user_id) {
+    // Check if student record exists
+    $checkQuery = "SELECT student_id FROM student_table WHERE user_id = ? LIMIT 1";
+    $stmt = $conn->prepare($checkQuery);
+    $stmt->bind_param("i", $user_id);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $student = $result->fetch_assoc();
+    $stmt->close();
+    
+    if ($student) {
+        error_log("Existing student_id found: " . $student['student_id']);
+        return $student['student_id'];
+    }
+    
+    // Create new student record with default values
+    $studentNumber = 'STU-' . date('Y') . '-' . str_pad($user_id, 5, '0', STR_PAD_LEFT);
+    $insertQuery = "INSERT INTO student_table (user_id, student_number, course, year_level) 
+                    VALUES (?, ?, 'Not Specified', '1st Year')";
+    $stmt = $conn->prepare($insertQuery);
+    $stmt->bind_param("is", $user_id, $studentNumber);
+    
+    if ($stmt->execute()) {
+        $student_id = $stmt->insert_id;
+        error_log("New student record created with ID: " . $student_id);
+        $stmt->close();
+        return $student_id;
+    }
+    
+    error_log("Failed to create student record: " . $stmt->error);
+    $stmt->close();
+    
+    return $user_id;
+}
+
 function getNotificationCount($conn, $user_id) {
     try {
-        $notif_query = "SELECT COUNT(*) as total FROM notification_table WHERE user_id = ? AND status = 'unread'";
+        $notif_query = "SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND status = 0";
         $stmt = $conn->prepare($notif_query);
         $stmt->bind_param("i", $user_id);
         $stmt->execute();
@@ -122,7 +59,7 @@ function getNotificationCount($conn, $user_id) {
     }
 }
 
-function handleThesisSubmission($conn, $user_id, $student_id, $first, $last, $post, $files) {
+function handleThesisSubmission($conn, $user_id, $first, $last, $post, $files) {
     $errors = [];
     
     $title       = trim($post["title"] ?? "");
@@ -166,7 +103,7 @@ function handleThesisSubmission($conn, $user_id, $student_id, $first, $last, $po
             $errors[] = "Only PDF files are allowed.";
         }
         
-        $maxFileSize = 10 * 1024 * 1024; // 10MB
+        $maxFileSize = 10 * 1024 * 1024;
         if ($fileSize > $maxFileSize) {
             $errors[] = "File size must not exceed 10MB.";
         }
@@ -185,13 +122,13 @@ function handleThesisSubmission($conn, $user_id, $student_id, $first, $last, $po
     }
 
     if (empty($errors)) {
-        return uploadThesis($conn, $user_id, $student_id, $first, $last, $post, $files, $fileTmp);
+        return uploadThesis($conn, $user_id, $first, $last, $post, $files, $fileTmp);
     }
 
     return ['success' => false, 'errors' => $errors];
 }
 
-function uploadThesis($conn, $user_id, $student_id, $first, $last, $post, $files, $fileTmp) {
+function uploadThesis($conn, $user_id, $first, $last, $post, $files, $fileTmp) {
     $uploadDir = __DIR__ . "/../../uploads/manuscripts/";
     
     if (!file_exists($uploadDir)) {
@@ -210,13 +147,12 @@ function uploadThesis($conn, $user_id, $student_id, $first, $last, $post, $files
         
         $dbFilePath = 'uploads/manuscripts/' . $newFileName;
         
-        error_log("=== THESIS INSERT DEBUG ===");
-        error_log("Student ID (submitted_by): " . $student_id);
-        error_log("Title: " . $post['title']);
+        // Get or create student_id from student_table
+        $student_id = getOrCreateStudentId($conn, $user_id);
         
-        $sql = "INSERT INTO theses (
+        $sql = "INSERT INTO thesis_table (
+            student_id,
             submitted_by, 
-            author, 
             title, 
             abstract, 
             keywords, 
@@ -225,146 +161,103 @@ function uploadThesis($conn, $user_id, $student_id, $first, $last, $post, $files
             adviser, 
             status, 
             file_path, 
-            created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())";
+            date_submitted,
+            is_archived
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), 0)";
         
         $stmt = $conn->prepare($sql);
         if ($stmt) {
             $status = 'pending';
-            $authorName = $first . ' ' . $last;
             
             $stmt->bind_param(
-                "isssssssss", 
-                $student_id,      // submitted_by
-                $authorName,      // author
-                $post['title'],   // title
-                $post['abstract'],// abstract
-                $post['keywords'],// keywords
-                $post['department'],// department
-                $post['year'],    // year
-                $post['adviser'], // adviser
-                $status,          // status
-                $dbFilePath       // file_path
+                "iissssssss", 
+                $student_id,
+                $user_id,
+                $post['title'],
+                $post['abstract'],
+                $post['keywords'],
+                $post['department'],
+                $post['year'],
+                $post['adviser'],
+                $status,
+                $dbFilePath
             );
             
             if ($stmt->execute()) {
                 $thesisId = $stmt->insert_id;
-                error_log("Thesis inserted successfully with ID: " . $thesisId);
-                error_log("File saved at: " . $dbFilePath);
                 
-                // Send notifications to faculty
-                $notificationResult = sendNotifications($conn, $thesisId, $post['title'], $first, $last);
-                error_log("Notifications sent: " . $notificationResult);
+                // SEND NOTIFICATIONS TO ALL FACULTY
+                sendNotificationsToFaculty($conn, $thesisId, $post['title'], $first, $last);
                 
                 $stmt->close();
                 
-                $message = "Thesis submitted successfully!";
-                if ($notificationResult > 0) {
-                    $message .= " Faculty members have been notified.";
-                } else {
-                    $message .= " (No faculty members found to notify)";
-                }
-                
-                return ['success' => true, 'message' => $message];
+                return ['success' => true, 'message' => "Thesis submitted successfully! Faculty members have been notified."];
             } else {
-                $error = "Database error: Failed to save thesis information.";
-                error_log("SQL Error: " . $stmt->error);
                 $stmt->close();
-                return ['success' => false, 'errors' => [$error]];
+                return ['success' => false, 'errors' => ["Database error: Failed to save thesis information."]];
             }
         } else {
-            $error = "System error: Failed to prepare query.";
-            error_log("Prepare Error: " . $conn->error);
-            return ['success' => false, 'errors' => [$error]];
+            return ['success' => false, 'errors' => ["System error: Failed to prepare query."]];
         }
     } else {
-        $error = "Failed to upload file. Please check directory permissions.";
-        error_log("Upload Error: Failed to move file to " . $uploadPath);
-        return ['success' => false, 'errors' => [$error]];
+        return ['success' => false, 'errors' => ["Failed to upload file. Please check directory permissions."]];
     }
 }
 
-function sendNotifications($conn, $thesisId, $title, $first, $last) {
-    try {
-        error_log("=== START NOTIFICATION ===");
+// SEPARATE FUNCTION FOR SENDING NOTIFICATIONS
+function sendNotificationsToFaculty($conn, $thesisId, $title, $first, $last) {
+    // Get all faculty members (role_id = 3)
+    $facultyQuery = "SELECT user_id, first_name, last_name FROM user_table WHERE role_id = 3";
+    $facultyResult = $conn->query($facultyQuery);
+    
+    if (!$facultyResult) {
+        error_log("Error fetching faculty: " . $conn->error);
+        return false;
+    }
+    
+    if ($facultyResult->num_rows == 0) {
+        error_log("No faculty members found with role_id = 3");
+        return false;
+    }
+    
+    $studentName = $first . ' ' . $last;
+    $shortTitle = substr($title, 0, 50) . (strlen($title) > 50 ? '...' : '');
+    $message = "New thesis submission from $studentName: \"$shortTitle\"";
+    $link = "../faculty/reviewThesis.php?id=" . $thesisId;
+    $type = "thesis_submission";
+    
+    $inserted = 0;
+    
+    while ($faculty = $facultyResult->fetch_assoc()) {
+        $facultyId = $faculty['user_id'];
         
-        // Create notification_table if not exists
-        $conn->query("CREATE TABLE IF NOT EXISTS notification_table (
-            notification_id INT AUTO_INCREMENT PRIMARY KEY,
-            user_id INT NOT NULL,
-            thesis_id INT NULL,
-            message TEXT NOT NULL,
-            status VARCHAR(20) DEFAULT 'unread',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )");
+        $notifSql = "INSERT INTO notifications (user_id, thesis_id, message, type, link, status, created_at) 
+                    VALUES (?, ?, ?, ?, ?, 0, NOW())";
+        $notifStmt = $conn->prepare($notifSql);
+        $notifStmt->bind_param("iisss", $facultyId, $thesisId, $message, $type, $link);
         
-        // Get all faculty members (role_id = 3)
-        $facultyQuery = "SELECT user_id, first_name, last_name FROM user_table WHERE role_id = 3";
-        $facultyResult = $conn->query($facultyQuery);
-        
-        if (!$facultyResult) {
-            error_log("Error fetching faculty: " . $conn->error);
-            return 0;
-        }
-        
-        error_log("Number of faculty found: " . $facultyResult->num_rows);
-        
-        $notificationsInserted = 0;
-        
-        if ($facultyResult && $facultyResult->num_rows > 0) {
-            $studentName = $first . ' ' . $last;
-            $shortTitle = substr($title, 0, 50) . (strlen($title) > 50 ? '...' : '');
-            $message = "New thesis from $studentName: \"$shortTitle\"";
-            
-            while ($faculty = $facultyResult->fetch_assoc()) {
-                $facultyId = $faculty['user_id'];
-                $facultyName = $faculty['first_name'] . ' ' . $faculty['last_name'];
-                
-                error_log("Sending notification to faculty: $facultyName (ID: $facultyId)");
-                
-                $notifSql = "INSERT INTO notification_table (user_id, thesis_id, message, status, created_at) 
-                            VALUES (?, ?, ?, 'unread', NOW())";
-                $notifStmt = $conn->prepare($notifSql);
-                $notifStmt->bind_param("iis", $facultyId, $thesisId, $message);
-                
-                if ($notifStmt->execute()) {
-                    $notificationsInserted++;
-                    error_log("Notification sent successfully to faculty ID: $facultyId");
-                } else {
-                    error_log("Error sending to faculty $facultyId: " . $notifStmt->error);
-                }
-                $notifStmt->close();
-            }
-            
-            error_log("Total notifications sent: $notificationsInserted");
+        if ($notifStmt->execute()) {
+            $inserted++;
+            error_log("Notification sent to faculty ID: $facultyId");
         } else {
-            error_log("No faculty members found with role_id = 3");
-            
-            // Debug: Show all users and their role_id
-            $allUsers = $conn->query("SELECT user_id, first_name, last_name, role_id FROM user_table");
-            if ($allUsers) {
-                error_log("All users in system:");
-                while ($user = $allUsers->fetch_assoc()) {
-                    error_log("User: {$user['first_name']} {$user['last_name']}, role_id: {$user['role_id']}");
-                }
-            }
+            error_log("Failed to send notification to faculty $facultyId: " . $notifStmt->error);
         }
-        
-        return $notificationsInserted;
-        
-    } catch (Exception $e) {
-        error_log("Notification error: " . $e->getMessage());
-        return 0;
+        $notifStmt->close();
     }
+    
+    error_log("Total notifications sent: $inserted out of " . $facultyResult->num_rows);
+    return $inserted > 0;
 }
 
-function getRecentSubmissions($conn, $student_id) {
+function getRecentSubmissions($conn, $user_id) {
     $submissions = [];
     try {
-        $recentQuery = "SELECT thesis_id, title, status, created_at, file_path 
-                       FROM theses 
-                       WHERE submitted_by = ? 
-                       ORDER BY created_at DESC 
+        $student_id = getOrCreateStudentId($conn, $user_id);
+        
+        $recentQuery = "SELECT thesis_id, title, status, file_path, date_submitted as created_at
+                       FROM thesis_table 
+                       WHERE student_id = ? 
+                       ORDER BY date_submitted DESC 
                        LIMIT 5";
         $stmt = $conn->prepare($recentQuery);
         $stmt->bind_param("i", $student_id);
@@ -379,4 +272,5 @@ function getRecentSubmissions($conn, $student_id) {
     }
     return $submissions;
 }
+
 ?>

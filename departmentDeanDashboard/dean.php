@@ -53,7 +53,7 @@ if ($check_created_column && $check_created_column->num_rows > 0) {
     $user_stmt_full->close();
 }
 
-// GET DEPARTMENT INFO FROM DEPARTMENT_TABLE (walay dean_name)
+// GET DEPARTMENT INFO FROM DEPARTMENT_TABLE
 $department_id = isset($_GET['dept_id']) ? intval($_GET['dept_id']) : 1;
 $department_name = "College of Arts and Sciences";
 $department_code = "CAS";
@@ -71,7 +71,7 @@ $dept_stmt->close();
 
 $dean_since = $user_created;
 
-// CREATE NOTIFICATIONS TABLE IF NOT EXISTS
+// CREATE NOTIFICATIONS TABLE IF NOT EXISTS - USING 'status'
 $check_notif_table = $conn->query("SHOW TABLES LIKE 'notifications'");
 if (!$check_notif_table || $check_notif_table->num_rows == 0) {
     $create_notif_table = "
@@ -82,10 +82,10 @@ if (!$check_notif_table || $check_notif_table->num_rows == 0) {
             message TEXT NOT NULL,
             type VARCHAR(50) DEFAULT 'info',
             link VARCHAR(255) NULL,
-            is_read TINYINT DEFAULT 0,
+            status TINYINT DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             INDEX (user_id),
-            INDEX (is_read)
+            INDEX (status)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     ";
     $conn->query($create_notif_table);
@@ -98,9 +98,9 @@ if ($check_id_col && $check_id_col->num_rows > 0) {
     $id_column = 'id';
 }
 
-// GET NOTIFICATION COUNT
+// GET NOTIFICATION COUNT - using 'status'
 $notificationCount = 0;
-$notif_query = "SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0";
+$notif_query = "SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND status = 0";
 $notif_stmt = $conn->prepare($notif_query);
 $notif_stmt->bind_param("i", $user_id);
 $notif_stmt->execute();
@@ -110,16 +110,16 @@ if ($notif_row = $notif_result->fetch_assoc()) {
 }
 $notif_stmt->close();
 
-// GET RECENT NOTIFICATIONS FOR DROPDOWN
+// GET RECENT NOTIFICATIONS FOR DROPDOWN - using 'status'
 $recentNotifications = [];
-$notif_list_query = "SELECT $id_column as id, user_id, thesis_id, message, is_read, created_at FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 5";
+$notif_list_query = "SELECT $id_column as id, user_id, thesis_id, message, status, created_at FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 5";
 $notif_list_stmt = $conn->prepare($notif_list_query);
 $notif_list_stmt->bind_param("i", $user_id);
 $notif_list_stmt->execute();
 $notif_list_result = $notif_list_stmt->get_result();
 while ($row = $notif_list_result->fetch_assoc()) {
     if ($row['thesis_id']) {
-        $thesis_q = $conn->prepare("SELECT title FROM theses WHERE thesis_id = ?");
+        $thesis_q = $conn->prepare("SELECT title FROM thesis_table WHERE thesis_id = ?");
         $thesis_q->bind_param("i", $row['thesis_id']);
         $thesis_q->execute();
         $thesis_result = $thesis_q->get_result();
@@ -132,10 +132,10 @@ while ($row = $notif_list_result->fetch_assoc()) {
 }
 $notif_list_stmt->close();
 
-// MARK NOTIFICATION AS READ (via AJAX)
+// MARK NOTIFICATION AS READ (via AJAX) - using 'status'
 if (isset($_POST['mark_read']) && isset($_POST['notif_id'])) {
     $notif_id = intval($_POST['notif_id']);
-    $update_query = "UPDATE notifications SET is_read = 1 WHERE $id_column = ? AND user_id = ?";
+    $update_query = "UPDATE notifications SET status = 1 WHERE $id_column = ? AND user_id = ?";
     $update_stmt = $conn->prepare($update_query);
     $update_stmt->bind_param("ii", $notif_id, $user_id);
     $update_stmt->execute();
@@ -144,15 +144,22 @@ if (isset($_POST['mark_read']) && isset($_POST['notif_id'])) {
     exit;
 }
 
-// MARK ALL NOTIFICATIONS AS READ
+// MARK ALL NOTIFICATIONS AS READ - using 'status'
 if (isset($_POST['mark_all_read'])) {
-    $update_query = "UPDATE notifications SET is_read = 1 WHERE user_id = ?";
+    $update_query = "UPDATE notifications SET status = 1 WHERE user_id = ?";
     $update_stmt = $conn->prepare($update_query);
     $update_stmt->bind_param("i", $user_id);
     $update_stmt->execute();
     $update_stmt->close();
     echo json_encode(['success' => true]);
     exit;
+}
+
+// CHECK IF THESIS_TABLE EXISTS
+$thesis_table_exists = false;
+$check_thesis_table = $conn->query("SHOW TABLES LIKE 'thesis_table'");
+if ($check_thesis_table && $check_thesis_table->num_rows > 0) {
+    $thesis_table_exists = true;
 }
 
 // GET STATISTICS FROM DATABASE
@@ -168,31 +175,31 @@ $faculty_query = "SELECT COUNT(*) as count FROM user_table WHERE role_id = 3 AND
 $faculty_result = $conn->query($faculty_query);
 $stats['total_faculty'] = ($faculty_result && $faculty_result->num_rows > 0) ? ($faculty_result->fetch_assoc())['count'] : 0;
 
-// Check if theses table exists
-$theses_table_exists = false;
-$check_theses = $conn->query("SHOW TABLES LIKE 'theses'");
-if ($check_theses && $check_theses->num_rows > 0) {
-    $theses_table_exists = true;
-    
-    $projects_query = "SELECT COUNT(*) as count FROM theses";
+if ($thesis_table_exists) {
+    $projects_query = "SELECT COUNT(*) as count FROM thesis_table";
     $projects_result = $conn->query($projects_query);
     $stats['total_projects'] = ($projects_result && $projects_result->num_rows > 0) ? ($projects_result->fetch_assoc())['count'] : 0;
     
     // COMPLETED = Approved theses
-    $completed_query = "SELECT COUNT(*) as count FROM theses WHERE status = 'Approved'";
+    $completed_query = "SELECT COUNT(*) as count FROM thesis_table WHERE status = 'approved'";
     $completed_result = $conn->query($completed_query);
     $stats['completed_projects'] = ($completed_result && $completed_result->num_rows > 0) ? ($completed_result->fetch_assoc())['count'] : 0;
     
-    // ONGOING = Pending theses (waiting for approval)
-    $ongoing_query = "SELECT COUNT(*) as count FROM theses WHERE status = 'Pending'";
+    // FORWARDED TO DEAN
+    $forwarded_query = "SELECT COUNT(*) as count FROM thesis_table WHERE status = 'forwarded_to_dean'";
+    $forwarded_result = $conn->query($forwarded_query);
+    $stats['pending_reviews'] = ($forwarded_result && $forwarded_result->num_rows > 0) ? ($forwarded_result->fetch_assoc())['count'] : 0;
+    
+    // ONGOING
+    $ongoing_query = "SELECT COUNT(*) as count FROM thesis_table WHERE status = 'pending_coordinator' OR status = 'pending'";
     $ongoing_result = $conn->query($ongoing_query);
     $stats['ongoing_projects'] = ($ongoing_result && $ongoing_result->num_rows > 0) ? ($ongoing_result->fetch_assoc())['count'] : 0;
     
-    // DEFENSES = Upcoming defenses (if may defense_date)
-    $check_defense_col = $conn->query("SHOW COLUMNS FROM theses LIKE 'defense_date'");
+    // DEFENSES
+    $check_defense_col = $conn->query("SHOW COLUMNS FROM thesis_table LIKE 'defense_date'");
     $has_defense_date = ($check_defense_col && $check_defense_col->num_rows > 0);
     if ($has_defense_date) {
-        $defenses_query = "SELECT COUNT(*) as count FROM theses WHERE defense_date IS NOT NULL AND defense_date >= CURDATE()";
+        $defenses_query = "SELECT COUNT(*) as count FROM thesis_table WHERE defense_date IS NOT NULL AND defense_date >= CURDATE()";
         $defenses_result = $conn->query($defenses_query);
         $stats['upcoming_defenses'] = ($defenses_result && $defenses_result->num_rows > 0) ? ($defenses_result->fetch_assoc())['count'] : 0;
     } else {
@@ -200,12 +207,10 @@ if ($check_theses && $check_theses->num_rows > 0) {
     }
     
     // Archived count
-    $archived_query = "SELECT COUNT(*) as count FROM theses WHERE status = 'Archived'";
+    $archived_query = "SELECT COUNT(*) as count FROM thesis_table WHERE status = 'archived'";
     $archived_result = $conn->query($archived_query);
     $stats['archived_count'] = ($archived_result && $archived_result->num_rows > 0) ? ($archived_result->fetch_assoc())['count'] : 0;
     
-    // Pending reviews
-    $stats['pending_reviews'] = $stats['ongoing_projects'];
     $stats['theses_approved'] = $stats['completed_projects'];
 } else {
     $stats['total_projects'] = 0;
@@ -217,17 +222,39 @@ if ($check_theses && $check_theses->num_rows > 0) {
     $stats['upcoming_defenses'] = 0;
 }
 
-// GET FACULTY MEMBERS
+// GET FORWARDED THESES FOR DEAN REVIEW
+$forwarded_theses = [];
+if ($thesis_table_exists) {
+    $forwarded_query = "SELECT thesis_id, title, adviser, department, year, status, date_submitted 
+                        FROM thesis_table 
+                        WHERE status = 'forwarded_to_dean'
+                        ORDER BY date_submitted DESC";
+    $forwarded_result = $conn->query($forwarded_query);
+    if ($forwarded_result && $forwarded_result->num_rows > 0) {
+        while ($row = $forwarded_result->fetch_assoc()) {
+            $forwarded_theses[] = [
+                'id' => $row['thesis_id'],
+                'title' => $row['title'],
+                'author' => $row['adviser'] ?? 'Unknown',
+                'department' => $row['department'] ?? $department_name,
+                'date' => isset($row['date_submitted']) ? date('M d, Y', strtotime($row['date_submitted'])) : date('M d, Y'),
+                'status' => $row['status']
+            ];
+        }
+    }
+}
+
+// GET FACULTY MEMBERS - using 'adviser' column
 $faculty_members = [];
 $faculty_query = "SELECT user_id, first_name, last_name, email, status FROM user_table WHERE role_id = 3 AND status = 'Active' ORDER BY first_name ASC";
 $faculty_result = $conn->query($faculty_query);
 if ($faculty_result && $faculty_result->num_rows > 0) {
     while ($row = $faculty_result->fetch_assoc()) {
         $project_count = 0;
-        if ($theses_table_exists) {
-            $proj_q = $conn->prepare("SELECT COUNT(*) as c FROM theses WHERE submitted_by = ? OR author = ?");
+        if ($thesis_table_exists) {
             $name = $row['first_name'] . " " . $row['last_name'];
-            $proj_q->bind_param("is", $row['user_id'], $name);
+            $proj_q = $conn->prepare("SELECT COUNT(*) as c FROM thesis_table WHERE adviser = ?");
+            $proj_q->bind_param("s", $name);
             $proj_q->execute();
             $proj_result = $proj_q->get_result();
             $project_count = $proj_result->fetch_assoc()['c'] ?? 0;
@@ -243,17 +270,18 @@ if ($faculty_result && $faculty_result->num_rows > 0) {
     }
 }
 
-// GET STUDENTS
+// GET STUDENTS - using 'adviser' column (FIXED: changed 'author' to 'adviser')
 $students_list = [];
 $students_query = "SELECT user_id, first_name, last_name, email, status FROM user_table WHERE role_id = 2 ORDER BY first_name ASC";
 $students_result = $conn->query($students_query);
 if ($students_result && $students_result->num_rows > 0) {
     while ($row = $students_result->fetch_assoc()) {
         $theses_count = 0;
-        if ($theses_table_exists) {
-            $thesis_q = $conn->prepare("SELECT COUNT(*) as c FROM theses WHERE author = ? OR author_id = ?");
+        if ($thesis_table_exists) {
             $name = $row['first_name'] . " " . $row['last_name'];
-            $thesis_q->bind_param("si", $name, $row['user_id']);
+            // FIXED: Changed 'author' to 'adviser'
+            $thesis_q = $conn->prepare("SELECT COUNT(*) as c FROM thesis_table WHERE adviser = ?");
+            $thesis_q->bind_param("s", $name);
             $thesis_q->execute();
             $thesis_result = $thesis_q->get_result();
             $theses_count = $thesis_result->fetch_assoc()['c'] ?? 0;
@@ -271,19 +299,19 @@ if ($students_result && $students_result->num_rows > 0) {
 
 // GET DEPARTMENT PROJECTS
 $department_projects = [];
-if ($theses_table_exists) {
-    $projects_query = "SELECT thesis_id, title, author, department, year, status, created_at FROM theses ORDER BY created_at DESC LIMIT 10";
+if ($thesis_table_exists) {
+    $projects_query = "SELECT thesis_id, title, adviser, department, year, status, date_submitted FROM thesis_table ORDER BY date_submitted DESC LIMIT 10";
     $projects_result = $conn->query($projects_query);
     if ($projects_result && $projects_result->num_rows > 0) {
         while ($row = $projects_result->fetch_assoc()) {
             $department_projects[] = [
                 'id' => $row['thesis_id'],
                 'title' => $row['title'],
-                'student' => $row['author'] ?? 'Unknown',
+                'student' => $row['adviser'] ?? 'Unknown',
                 'adviser' => 'N/A',
                 'department' => $row['department'] ?? $department_name,
                 'year' => $row['year'] ?? 'N/A',
-                'submitted' => isset($row['created_at']) ? date('M d, Y', strtotime($row['created_at'])) : date('M d, Y'),
+                'submitted' => isset($row['date_submitted']) ? date('M d, Y', strtotime($row['date_submitted'])) : date('M d, Y'),
                 'status' => strtolower($row['status']),
                 'defense_date' => null
             ];
@@ -298,18 +326,18 @@ $archived_projects = array_filter($department_projects, function($p) {
 
 // GET UPCOMING DEFENSES
 $upcoming_defenses = [];
-if ($theses_table_exists) {
-    $check_defense_col = $conn->query("SHOW COLUMNS FROM theses LIKE 'defense_date'");
+if ($thesis_table_exists) {
+    $check_defense_col = $conn->query("SHOW COLUMNS FROM thesis_table LIKE 'defense_date'");
     $has_defense_date = ($check_defense_col && $check_defense_col->num_rows > 0);
     
     if ($has_defense_date) {
-        $defenses_query = "SELECT thesis_id, title, author, defense_date, defense_time, panelists FROM theses WHERE defense_date IS NOT NULL AND defense_date >= CURDATE() ORDER BY defense_date ASC LIMIT 5";
+        $defenses_query = "SELECT thesis_id, title, adviser, defense_date, defense_time, panelists FROM thesis_table WHERE defense_date IS NOT NULL AND defense_date >= CURDATE() ORDER BY defense_date ASC LIMIT 5";
         $defenses_result = $conn->query($defenses_query);
         if ($defenses_result && $defenses_result->num_rows > 0) {
             while ($row = $defenses_result->fetch_assoc()) {
                 $upcoming_defenses[] = [
                     'id' => $row['thesis_id'],
-                    'student' => $row['author'] ?? 'Unknown',
+                    'student' => $row['adviser'] ?? 'Unknown',
                     'title' => $row['title'],
                     'date' => $row['defense_date'],
                     'time' => $row['defense_time'] ?? 'TBA',
@@ -395,7 +423,7 @@ $currentPage = basename($_SERVER['PHP_SELF']);
         .notification-header h3 { font-size: 1rem; font-weight: 600; color: #991b1b; margin: 0; }
         .mark-all-read { font-size: 0.7rem; color: #dc2626; cursor: pointer; background: none; border: none; }
         .notification-list { max-height: 400px; overflow-y: auto; }
-        .notification-item { display: flex; gap: 12px; padding: 14px 20px; border-bottom: 1px solid #fef2f2; cursor: pointer; transition: background 0.2s; }
+        .notification-item { display: flex; gap: 12px; padding: 14px 20px; border-bottom: 1px solid #fef2f2; cursor: pointer; transition: background 0.2s; text-decoration: none; color: inherit; }
         .notification-item:hover { background: #fef2f2; }
         .notification-item.unread { background: #fff5f5; border-left: 3px solid #dc2626; }
         .notification-item.empty { justify-content: center; color: #9ca3af; cursor: default; }
@@ -447,6 +475,17 @@ $currentPage = basename($_SERVER['PHP_SELF']);
         .dean-info { text-align: right; }
         .dean-name { font-size: 1rem; font-weight: 600; margin-bottom: 4px; }
         .dean-since { font-size: 0.7rem; opacity: 0.8; }
+        
+        .pending-card { background: white; border-radius: 24px; padding: 24px; margin-bottom: 32px; border: 1px solid #ffcdd2; }
+        .pending-card h3 { font-size: 1rem; font-weight: 600; color: #991b1b; margin-bottom: 20px; display: flex; align-items: center; gap: 8px; }
+        .pending-list { display: flex; flex-direction: column; gap: 12px; }
+        .pending-item { display: flex; justify-content: space-between; align-items: center; padding: 16px; background: #fef2f2; border-radius: 16px; border-left: 3px solid #dc2626; flex-wrap: wrap; gap: 12px; }
+        .pending-item:hover { background: #fee2e2; }
+        .pending-info { flex: 1; }
+        .pending-title { font-weight: 600; font-size: 0.9rem; color: #1f2937; margin-bottom: 5px; }
+        .pending-meta { font-size: 0.7rem; color: #6b7280; display: flex; gap: 15px; flex-wrap: wrap; }
+        .btn-review { background: #dc2626; color: white; padding: 6px 16px; border-radius: 20px; text-decoration: none; font-size: 0.75rem; font-weight: 500; transition: all 0.2s; }
+        .btn-review:hover { background: #991b1b; transform: translateY(-2px); }
         
         .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px; margin-bottom: 32px; }
         .stat-card { background: white; border-radius: 20px; padding: 24px; display: flex; align-items: center; gap: 18px; border: 1px solid #ffcdd2; transition: all 0.3s; }
@@ -530,6 +569,9 @@ $currentPage = basename($_SERVER['PHP_SELF']);
         .quick-action-btn { background: white; border: 1px solid #ffcdd2; padding: 10px 20px; border-radius: 40px; text-decoration: none; color: #dc2626; font-size: 0.85rem; font-weight: 500; display: flex; align-items: center; gap: 8px; transition: all 0.2s; }
         .quick-action-btn:hover { background: #dc2626; color: white; transform: translateY(-2px); }
         
+        .empty-state { text-align: center; padding: 40px; color: #9ca3af; }
+        .empty-state i { font-size: 3rem; margin-bottom: 12px; color: #dc2626; }
+        
         @media (max-width: 1024px) { .stats-grid, .dept-stats, .charts-section, .bottom-grid { grid-template-columns: repeat(2, 1fr); } }
         @media (max-width: 768px) {
             .main-content { padding: 20px; }
@@ -540,6 +582,8 @@ $currentPage = basename($_SERVER['PHP_SELF']);
             .defense-item { flex-direction: column; text-align: center; }
             .notification-dropdown { width: 320px; right: -10px; }
             .chart-container { height: 250px; }
+            .pending-item { flex-direction: column; align-items: flex-start; }
+            .btn-review { align-self: flex-start; }
         }
         @media (max-width: 480px) { 
             .notification-dropdown { width: 300px; right: -5px; }
@@ -547,11 +591,14 @@ $currentPage = basename($_SERVER['PHP_SELF']);
         }
         
         body.dark-mode { background: #1a1a1a; }
-        body.dark-mode .top-nav, body.dark-mode .stat-card, body.dark-mode .dept-stat-card, body.dark-mode .chart-card, body.dark-mode .faculty-card, body.dark-mode .defense-item, body.dark-mode .notification-dropdown { background: #2d2d2d; border-color: #991b1b; }
-        body.dark-mode .stat-details h3, body.dark-mode .dept-stat-value, body.dark-mode .section-title, body.dark-mode .notification-header h3 { color: #fecaca; }
-        body.dark-mode .faculty-name, body.dark-mode .defense-title, body.dark-mode .activity-text, body.dark-mode .notif-message { color: #e5e7eb; }
-        body.dark-mode .notification-item:hover { background: #3d3d3d; }
+        body.dark-mode .top-nav, body.dark-mode .stat-card, body.dark-mode .dept-stat-card, body.dark-mode .chart-card, body.dark-mode .faculty-card, body.dark-mode .defense-item, body.dark-mode .notification-dropdown, body.dark-mode .pending-card { background: #2d2d2d; border-color: #991b1b; }
+        body.dark-mode .stat-details h3, body.dark-mode .dept-stat-value, body.dark-mode .section-title, body.dark-mode .notification-header h3, body.dark-mode .pending-title { color: #fecaca; }
+        body.dark-mode .faculty-name, body.dark-mode .defense-title, body.dark-mode .activity-text, body.dark-mode .notif-message, body.dark-mode .pending-meta { color: #e5e7eb; }
+        body.dark-mode .notification-item:hover, body.dark-mode .pending-item:hover { background: #3d3d3d; }
         body.dark-mode .notification-item.unread { background: #3a2a2a; }
+        body.dark-mode .empty-state { color: #9ca3af; }
+        body.dark-mode .btn-review { background: #dc2626; }
+        body.dark-mode .btn-review:hover { background: #991b1b; }
     </style>
 </head>
 <body>
@@ -583,16 +630,16 @@ $currentPage = basename($_SERVER['PHP_SELF']);
                             <div class="notification-item empty"><div class="notif-icon"><i class="far fa-bell-slash"></i></div><div class="notif-content"><div class="notif-message">No notifications yet</div></div></div>
                         <?php else: ?>
                             <?php foreach ($recentNotifications as $notif): ?>
-                                <div class="notification-item <?= $notif['is_read'] == 0 ? 'unread' : '' ?>" data-id="<?= $notif['id'] ?>">
+                                <a href="reviewThesis.php?id=<?= $notif['thesis_id'] ?>" class="notification-item <?= $notif['status'] == 0 ? 'unread' : '' ?>" data-id="<?= $notif['id'] ?>">
                                     <div class="notif-icon"><?php if(strpos($notif['message'], 'approved') !== false) echo '<i class="fas fa-check-circle"></i>'; elseif(strpos($notif['message'], 'forwarded') !== false) echo '<i class="fas fa-arrow-right"></i>'; elseif(strpos($notif['message'], 'revision') !== false) echo '<i class="fas fa-edit"></i>'; elseif(strpos($notif['message'], 'archived') !== false) echo '<i class="fas fa-archive"></i>'; else echo '<i class="fas fa-bell"></i>'; ?></div>
                                     <div class="notif-content">
                                         <div class="notif-message"><?= htmlspecialchars($notif['message']) ?></div>
                                         <div class="notif-time"><i class="far fa-clock"></i> <?php $date = new DateTime($notif['created_at']); $now = new DateTime(); $diff = $now->diff($date); if($diff->days == 0) echo 'Today, ' . $date->format('h:i A'); elseif($diff->days == 1) echo 'Yesterday, ' . $date->format('h:i A'); else echo $date->format('M d, Y h:i A'); ?></div>
                                         <?php if (isset($notif['thesis_title'])): ?>
-                                            <div class="notif-thesis"><i class="fas fa-book"></i> <?= htmlspecialchars($notif['thesis_title']) ?></div>
+                                            <div class="notif-thesis" style="font-size:0.7rem; color:#6b7280; margin-top:4px;"><i class="fas fa-book"></i> <?= htmlspecialchars($notif['thesis_title']) ?></div>
                                         <?php endif; ?>
                                     </div>
-                                </div>
+                                </a>
                             <?php endforeach; ?>
                         <?php endif; ?>
                     </div>
@@ -624,7 +671,6 @@ $currentPage = basename($_SERVER['PHP_SELF']);
             <a href="dean.php?section=projects&dept_id=<?= $department_id ?>" class="nav-item <?= $section == 'projects' ? 'active' : '' ?>"><i class="fas fa-project-diagram"></i><span>Projects</span></a>
             <a href="dean.php?section=archive&dept_id=<?= $department_id ?>" class="nav-item <?= $section == 'archive' ? 'active' : '' ?>"><i class="fas fa-archive"></i><span>Archived</span></a>
             <a href="dean.php?section=reports&dept_id=<?= $department_id ?>" class="nav-item <?= $section == 'reports' ? 'active' : '' ?>"><i class="fas fa-chart-bar"></i><span>Reports</span></a>
-            <a href="notifications.php" class="nav-item"><i class="fas fa-bell"></i><span>Notifications</span><?php if ($notificationCount > 0): ?><span style="background:#ef4444; color:white; border-radius:50%; padding:2px 6px; font-size:0.7rem; margin-left:auto;"><?= $notificationCount ?></span><?php endif; ?></a>
         </div>
         <div class="nav-footer">
             <div class="theme-toggle"><input type="checkbox" id="darkmode"><label for="darkmode" class="toggle-label"><i class="fas fa-sun"></i><i class="fas fa-moon"></i></label></div>
@@ -645,6 +691,27 @@ $currentPage = basename($_SERVER['PHP_SELF']);
                 <div class="dean-since">Since <?= htmlspecialchars($dean_since) ?></div>
             </div>
         </div>
+
+        <!-- PENDING THESES FOR DEAN REVIEW SECTION -->
+        <?php if (!empty($forwarded_theses)): ?>
+        <div class="pending-card">
+            <h3><i class="fas fa-clock"></i> Theses Awaiting Your Review (<?= count($forwarded_theses) ?>)</h3>
+            <div class="pending-list">
+                <?php foreach ($forwarded_theses as $thesis): ?>
+                <div class="pending-item">
+                    <div class="pending-info">
+                        <div class="pending-title"><?= htmlspecialchars($thesis['title']) ?></div>
+                        <div class="pending-meta">
+                            <span><i class="fas fa-user"></i> <?= htmlspecialchars($thesis['author']) ?></span>
+                            <span><i class="fas fa-calendar"></i> <?= $thesis['date'] ?></span>
+                        </div>
+                    </div>
+                    <a href="reviewThesis.php?id=<?= $thesis['id'] ?>" class="btn-review"><i class="fas fa-eye"></i> Review Thesis</a>
+                </div>
+                <?php endforeach; ?>
+            </div>
+        </div>
+        <?php endif; ?>
 
         <div class="stats-grid">
             <div class="stat-card"><div class="stat-icon"><i class="fas fa-user-graduate"></i></div><div class="stat-details"><h3><?= number_format($stats['total_students']) ?></h3><p>Students</p></div></div>
@@ -677,7 +744,6 @@ $currentPage = basename($_SERVER['PHP_SELF']);
             </div>
         </div>
 
-        <!-- Rest of the dashboard content (same as before) -->
         <div class="charts-section">
             <div class="chart-card">
                 <h3><i class="fas fa-chart-pie"></i> Project Status Distribution</h3>
@@ -709,7 +775,7 @@ $currentPage = basename($_SERVER['PHP_SELF']);
                     </div>
                     <?php endforeach; ?>
                 <?php else: ?>
-                    <div class="empty-state" style="text-align:center; padding:40px; color:#9ca3af;"><i class="fas fa-users"></i><p>No faculty members found</p></div>
+                    <div class="empty-state"><i class="fas fa-users"></i><p>No faculty members found</p></div>
                 <?php endif; ?>
             </div>
         </div>
@@ -733,7 +799,7 @@ $currentPage = basename($_SERVER['PHP_SELF']);
                     </tbody>
                 </table>
                 <?php else: ?>
-                    <div class="empty-state" style="text-align:center; padding:40px; color:#9ca3af;"><i class="fas fa-folder-open"></i><p>No projects found</p></div>
+                    <div class="empty-state"><i class="fas fa-folder-open"></i><p>No projects found</p></div>
                 <?php endif; ?>
             </div>
         </div>
@@ -749,7 +815,7 @@ $currentPage = basename($_SERVER['PHP_SELF']);
                 </div>
                 <?php endforeach; ?>
             <?php else: ?>
-                <div class="empty-state" style="text-align:center; padding:40px; color:#9ca3af;"><i class="fas fa-calendar-alt"></i><p>No upcoming defenses scheduled</p></div>
+                <div class="empty-state"><i class="fas fa-calendar-alt"></i><p>No upcoming defenses scheduled</p></div>
             <?php endif; ?>
         </div>
 
@@ -763,7 +829,7 @@ $currentPage = basename($_SERVER['PHP_SELF']);
                     <?php endforeach; ?>
                 </div>
                 <?php else: ?>
-                    <div class="empty-state" style="text-align:center; padding:40px; color:#9ca3af;"><i class="fas fa-clock"></i><p>No recent activities</p></div>
+                    <div class="empty-state"><i class="fas fa-clock"></i><p>No recent activities</p></div>
                 <?php endif; ?>
             </div>
             <div class="workload-section">
@@ -774,7 +840,7 @@ $currentPage = basename($_SERVER['PHP_SELF']);
                 <div class="workload-item"><span class="workload-label">Faculty Under Load (&lt; 3 projects)</span><span class="workload-value"><?= count(array_filter($workload_data, function($w) { return $w < 3; })) ?></span></div>
                 <div class="workload-item"><span class="workload-label">Faculty Over Load (&gt; 6 projects)</span><span class="workload-value"><?= count(array_filter($workload_data, function($w) { return $w > 6; })) ?></span></div>
                 <?php else: ?>
-                    <div class="empty-state" style="text-align:center; padding:40px; color:#9ca3af;"><i class="fas fa-chart-line"></i><p>No faculty workload data available</p></div>
+                    <div class="empty-state"><i class="fas fa-chart-line"></i><p>No faculty workload data available</p></div>
                 <?php endif; ?>
             </div>
         </div>
@@ -787,7 +853,7 @@ $currentPage = basename($_SERVER['PHP_SELF']);
         </div>
 
         <?php elseif ($section == 'faculty'): ?>
-        <!-- FACULTY VIEW (simplified for brevity) -->
+        <!-- FACULTY VIEW -->
         <div class="dept-banner">
             <div class="dept-info">
                 <h1><?= htmlspecialchars($department_name) ?> <span style="font-size: 1rem; opacity: 0.8;">(<?= htmlspecialchars($department_code) ?>)</span></h1>
@@ -826,7 +892,7 @@ $currentPage = basename($_SERVER['PHP_SELF']);
             <div class="section-header"><h2 class="section-title"><i class="fas fa-user-graduate"></i> All Students (<?= count($students_list) ?>)</h2></div>
             <?php if (count($students_list) > 0): ?>
             <div class="table-responsive">
-                <table class="theses-table"><thead><tr><th>Student Name</th><th>Email</th><th>Theses Count</th><th>Status</th><th>Action</th></tr></thead>
+                <table class="theses-table"><thead><tr><th>Student Name</th><th>Email</th><th>Theses Count</th><th>Status</th><th>Action</th></td></thead>
                 <tbody><?php foreach ($students_list as $student): ?><tr>
                     <td><?= htmlspecialchars($student['name']) ?></td>
                     <td><?= htmlspecialchars($student['email']) ?></td>
@@ -837,7 +903,7 @@ $currentPage = basename($_SERVER['PHP_SELF']);
                 </table>
             </div>
             <?php else: ?>
-                <div class="empty-state" style="text-align:center; padding:40px; color:#9ca3af;"><i class="fas fa-user-graduate"></i><p>No students found</p></div>
+                <div class="empty-state"><i class="fas fa-user-graduate"></i><p>No students found</p></div>
             <?php endif; ?>
         </div>
 
@@ -868,7 +934,7 @@ $currentPage = basename($_SERVER['PHP_SELF']);
                 </table>
             </div>
             <?php else: ?>
-                <div class="empty-state" style="text-align:center; padding:40px; color:#9ca3af;"><i class="fas fa-folder-open"></i><p>No projects found</p></div>
+                <div class="empty-state"><i class="fas fa-folder-open"></i><p>No projects found</p></div>
             <?php endif; ?>
         </div>
 
@@ -899,7 +965,7 @@ $currentPage = basename($_SERVER['PHP_SELF']);
                 </table>
             </div>
             <?php else: ?>
-                <div class="empty-state" style="text-align:center; padding:40px; color:#9ca3af;"><i class="fas fa-archive"></i><p>No archived projects found</p></div>
+                <div class="empty-state"><i class="fas fa-archive"></i><p>No archived projects found</p></div>
             <?php endif; ?>
         </div>
 

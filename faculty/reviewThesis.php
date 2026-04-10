@@ -17,6 +17,13 @@ $thesis_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 
 // ==================== FUNCTION TO NOTIFY COORDINATOR ====================
 function notifyCoordinator($conn, $thesis_id, $thesis_title, $student_name, $faculty_name) {
+    error_log("=== NOTIFY COORDINATOR START ===");
+    error_log("Thesis ID: " . $thesis_id);
+    error_log("Thesis Title: " . $thesis_title);
+    error_log("Student Name: " . $student_name);
+    error_log("Faculty Name: " . $faculty_name);
+    
+    // Make sure notifications table exists
     $conn->query("CREATE TABLE IF NOT EXISTS notifications (
         notification_id INT AUTO_INCREMENT PRIMARY KEY,
         user_id INT NOT NULL,
@@ -24,30 +31,61 @@ function notifyCoordinator($conn, $thesis_id, $thesis_title, $student_name, $fac
         message TEXT NOT NULL,
         type VARCHAR(50) DEFAULT 'info',
         link VARCHAR(255) NULL,
-        is_read TINYINT DEFAULT 0,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        status TINYINT DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX (user_id),
+        INDEX (status)
     )");
     
-    $coord_query = "SELECT user_id FROM user_table WHERE role_id = 6";
+    // Get all coordinators (role_id = 6)
+    $coord_query = "SELECT user_id, first_name, last_name FROM user_table WHERE role_id = 6";
     $coord_result = $conn->query($coord_query);
     
-    if (!$coord_result || $coord_result->num_rows == 0) {
+    if (!$coord_result) {
+        error_log("Error fetching coordinators: " . $conn->error);
         return false;
     }
+    
+    if ($coord_result->num_rows == 0) {
+        error_log("No coordinator found with role_id = 6");
+        // Debug: Show all users and their role_id
+        $allUsers = $conn->query("SELECT user_id, first_name, last_name, role_id FROM user_table");
+        if ($allUsers) {
+            while ($user = $allUsers->fetch_assoc()) {
+                error_log("User: {$user['first_name']} {$user['last_name']}, role_id: {$user['role_id']}");
+            }
+        }
+        return false;
+    }
+    
+    error_log("Found " . $coord_result->num_rows . " coordinator(s)");
     
     $notified = false;
     while ($coordinator = $coord_result->fetch_assoc()) {
         $coordinator_id = $coordinator['user_id'];
-        $message = "📢 Thesis ready for review: \"" . $thesis_title . "\" from student " . $student_name . ". Faculty: " . $faculty_name . " has approved this thesis.";
+        $coordinator_name = $coordinator['first_name'] . ' ' . $coordinator['last_name'];
         
-        $insert_sql = "INSERT INTO notifications (user_id, thesis_id, message, type, is_read, created_at) 
-                       VALUES (?, ?, ?, 'faculty_forward', 0, NOW())";
-        $stmt = $conn->prepare($insert_sql);
-        $stmt->bind_param("iis", $coordinator_id, $thesis_id, $message);
-        $stmt->execute();
-        $stmt->close();
-        $notified = true;
+        $message = "📢 New thesis forwarded for review: \"" . $thesis_title . "\" from student " . $student_name . ". Faculty: " . $faculty_name . " has approved this thesis.";
+        $link = "../coordinator/reviewThesis.php?id=" . $thesis_id;
+        
+        error_log("Inserting notification for coordinator: $coordinator_name (ID: $coordinator_id)");
+        
+        // Use direct query to avoid prepare statement issues
+        $message_escaped = mysqli_real_escape_string($conn, $message);
+        $link_escaped = mysqli_real_escape_string($conn, $link);
+        
+        $insert_sql = "INSERT INTO notifications (user_id, thesis_id, message, type, link, status, created_at) 
+                       VALUES ($coordinator_id, $thesis_id, '$message_escaped', 'faculty_forward', '$link_escaped', 0, NOW())";
+        
+        if ($conn->query($insert_sql)) {
+            $notified = true;
+            error_log("SUCCESS: Notification inserted for coordinator ID: $coordinator_id");
+        } else {
+            error_log("FAILED: Error inserting notification - " . $conn->error);
+        }
     }
+    
+    error_log("=== NOTIFY COORDINATOR END - Result: " . ($notified ? "SUCCESS" : "FAILED") . " ===");
     return $notified;
 }
 
@@ -87,8 +125,8 @@ $thesis = null;
 
 try {
     $query = "SELECT t.*, u.first_name, u.last_name, u.email, u.user_id 
-              FROM theses t
-              JOIN user_table u ON t.submitted_by = u.user_id
+              FROM thesis_table t
+              JOIN user_table u ON t.student_id = u.user_id
               WHERE t.thesis_id = ?";
     $stmt = $conn->prepare($query);
     $stmt->bind_param("i", $thesis_id);
@@ -118,7 +156,7 @@ if (isset($_POST['approve_thesis'])) {
     
     try {
         // Update thesis status to 'pending_coordinator'
-        $updateQuery = "UPDATE theses SET status = 'pending_coordinator' WHERE thesis_id = ?";
+        $updateQuery = "UPDATE thesis_table SET status = 'pending_coordinator' WHERE thesis_id = ?";
         $stmt = $conn->prepare($updateQuery);
         $stmt->bind_param("i", $thesis_id);
         $stmt->execute();
@@ -139,7 +177,8 @@ if (isset($_POST['approve_thesis'])) {
         $thesis_title = $thesis['title'];
         
         // SEND NOTIFICATION TO COORDINATOR
-        notifyCoordinator($conn, $thesis_id, $thesis_title, $student_name, $faculty_name);
+        $notifyResult = notifyCoordinator($conn, $thesis_id, $thesis_title, $student_name, $faculty_name);
+        error_log("Notify Coordinator Result: " . ($notifyResult ? "SUCCESS" : "FAILED"));
         
         $conn->commit();
         
@@ -155,14 +194,14 @@ if (isset($_POST['approve_thesis'])) {
     }
 }
 
-// ==================== HANDLE REJECT ====================
+// ==================== HANDLE REJECT/REVISE ====================
 if (isset($_POST['reject_thesis'])) {
     $feedback = isset($_POST['feedback']) ? trim($_POST['feedback']) : '';
     
     $conn->begin_transaction();
     
     try {
-        $updateQuery = "UPDATE theses SET status = 'rejected' WHERE thesis_id = ?";
+        $updateQuery = "UPDATE thesis_table SET status = 'rejected' WHERE thesis_id = ?";
         $stmt = $conn->prepare($updateQuery);
         $stmt->bind_param("i", $thesis_id);
         $stmt->execute();
@@ -178,9 +217,9 @@ if (isset($_POST['reject_thesis'])) {
         }
         
         // Notify student
-        $notifMessage = "Your thesis '" . $thesis['title'] . "' has been rejected.";
-        $notifQuery = "INSERT INTO notifications (user_id, thesis_id, message, type, is_read, created_at) 
-                      VALUES (?, ?, ?, 'student_notif', 0, NOW())";
+        $notifMessage = "Your thesis '" . $thesis['title'] . "' has been rejected. Reason: " . $feedback;
+        $notifQuery = "INSERT INTO notifications (user_id, thesis_id, message, type, link, status, created_at) 
+                      VALUES (?, ?, ?, 'student_notif', NULL, 0, NOW())";
         $stmt2 = $conn->prepare($notifQuery);
         $stmt2->bind_param("iis", $thesis['user_id'], $thesis_id, $notifMessage);
         $stmt2->execute();
@@ -213,7 +252,6 @@ if (isset($_SESSION['error_message'])) {
     unset($_SESSION['error_message']);
 }
 
-// I-normalize ang status para ma-compare
 $current_status = strtolower(trim($thesis['status'] ?? ''));
 
 $pageTitle = "Review Thesis";
@@ -311,7 +349,6 @@ $pageTitle = "Review Thesis";
             border-radius: 6px;
         }
         
-        /* ACTION BUTTONS - GREEN APPROVE, RED REVISE - GAMAY NGA SIZE */
         .action-buttons {
             display: flex;
             gap: 0.75rem;
@@ -441,10 +478,9 @@ $pageTitle = "Review Thesis";
                 <div class="detail-item"><span class="detail-label">Student Name: </span><span class="detail-value"><?= htmlspecialchars($thesis['first_name'] . ' ' . $thesis['last_name']) ?></span></div>
                 <div class="detail-item"><span class="detail-label">Email: </span><span class="detail-value"><?= htmlspecialchars($thesis['email']) ?></span></div>
                 <div class="detail-item"><span class="detail-label">Department: </span><span class="detail-value"><?= htmlspecialchars($thesis['department'] ?? 'N/A') ?></span></div>
-                <div class="detail-item"><span class="detail-label">Course: </span><span class="detail-value"><?= htmlspecialchars($thesis['course'] ?? 'N/A') ?></span></div>
                 <div class="detail-item"><span class="detail-label">Year: </span><span class="detail-value"><?= htmlspecialchars($thesis['year'] ?? 'N/A') ?></span></div>
                 <?php 
-                $dateField = isset($thesis['created_at']) ? $thesis['created_at'] : (isset($thesis['date_submitted']) ? $thesis['date_submitted'] : date('Y-m-d H:i:s'));
+                $dateField = isset($thesis['date_submitted']) ? $thesis['date_submitted'] : date('Y-m-d H:i:s');
                 ?>
                 <div class="detail-item"><span class="detail-label">Date Submitted: </span><span class="detail-value"><?= date('F d, Y', strtotime($dateField)) ?></span></div>
             </div>
@@ -469,7 +505,6 @@ $pageTitle = "Review Thesis";
                 <?php endif; ?>
             </div>
 
-            <!-- =============== ACTION BUTTONS - GAMAY NGA SIZE =============== -->
             <?php if ($current_status == 'pending'): ?>
             <div class="action-buttons">
                 <button class="btn btn-approve" onclick="showApproveModal()">
@@ -510,7 +545,6 @@ $pageTitle = "Review Thesis";
                 </button>
             </div>
             <?php endif; ?>
-            <!-- =============== END ACTION BUTTONS =============== -->
 
         </div>
     </main>
@@ -548,6 +582,22 @@ $pageTitle = "Review Thesis";
     </div>
 </div>
 
+<!-- Reject Modal -->
+<div id="rejectModal" class="modal">
+    <div class="modal-content">
+        <h3 style="color:#dc3545;"><i class="fas fa-times-circle"></i> Reject Thesis</h3>
+        <p>Are you sure you want to reject this thesis?</p>
+        <form method="POST" action="">
+            <input type="hidden" name="reject_thesis" value="1">
+            <textarea name="feedback" rows="3" placeholder="Feedback for the student..." style="width:100%; margin:1rem 0; padding:0.75rem; border:1px solid #e0e0e0; border-radius:6px;" required></textarea>
+            <div class="modal-buttons">
+                <button type="button" class="btn" style="background:#6c757d; color:white;" onclick="closeRejectModal()">Cancel</button>
+                <button type="submit" class="btn btn-reject">Confirm Reject</button>
+            </div>
+        </form>
+    </div>
+</div>
+
 <!-- Archive Modal -->
 <div id="archiveModal" class="modal">
     <div class="modal-content">
@@ -575,7 +625,6 @@ $pageTitle = "Review Thesis";
 </div>
 
 <script>
-    // Dark Mode
     const darkToggle = document.getElementById('darkmode');
     if(darkToggle){
         darkToggle.addEventListener('change',()=>{
@@ -588,7 +637,6 @@ $pageTitle = "Review Thesis";
         }
     }
     
-    // Sidebar Toggle
     const sidebar=document.getElementById('sidebar');
     const overlay=document.getElementById('overlay');
     const hamburger=document.getElementById('hamburgerBtn');
@@ -603,7 +651,6 @@ $pageTitle = "Review Thesis";
     if(mobileBtn) mobileBtn.addEventListener('click',toggleSidebar);
     if(overlay) overlay.addEventListener('click',toggleSidebar);
     
-    // Modal Functions
     function showApproveModal(){
         document.getElementById('approveModal').style.display='flex';
     }
@@ -633,14 +680,12 @@ $pageTitle = "Review Thesis";
         document.getElementById('archiveModal').style.display='none';
     }
     
-    // Close modal when clicking outside
     window.onclick=function(e){
         if(e.target.classList.contains('modal')){
             e.target.style.display='none';
         }
     }
     
-    // Close modals with Escape key
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') {
             document.getElementById('approveModal').style.display='none';

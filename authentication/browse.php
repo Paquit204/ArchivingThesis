@@ -18,17 +18,17 @@ $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 $year = isset($_GET['year']) ? trim($_GET['year']) : '';
 $department = isset($_GET['department']) ? trim($_GET['department']) : '';
 
-// =============== FIXED: Using 'theses' table ===============
+// =============== FIXED: Using 'thesis_table' ===============
 // Only show archived theses (approved and ready for public viewing)
 $sql = "SELECT t.*, u.first_name, u.last_name 
-        FROM theses t
-        JOIN user_table u ON t.submitted_by = u.user_id
-        WHERE t.status = 'archived'"; // Only show archived thesis
+        FROM thesis_table t
+        JOIN user_table u ON t.student_id = u.user_id
+        WHERE t.status = 'approved'"; // Show approved theses (archived status)
 
 $countSql = "SELECT COUNT(*) as total 
-             FROM theses t
-             JOIN user_table u ON t.submitted_by = u.user_id
-             WHERE t.status = 'archived'";
+             FROM thesis_table t
+             JOIN user_table u ON t.student_id = u.user_id
+             WHERE t.status = 'approved'";
 
 $params = [];
 $countParams = [];
@@ -54,10 +54,10 @@ if (!empty($search)) {
     $countTypes .= "sss";
 }
 
-// Add year filter (using created_at instead of date_submitted)
+// Add year filter (using date_submitted)
 if (!empty($year)) {
-    $sql .= " AND YEAR(t.created_at) = ?";
-    $countSql .= " AND YEAR(t.created_at) = ?";
+    $sql .= " AND YEAR(t.date_submitted) = ?";
+    $countSql .= " AND YEAR(t.date_submitted) = ?";
     
     $params[] = $year;
     $types .= "s";
@@ -90,7 +90,7 @@ $totalPages = ceil($totalTheses / $limit);
 $stmt->close();
 
 // Add pagination to main query
-$sql .= " ORDER BY t.created_at DESC LIMIT ? OFFSET ?";
+$sql .= " ORDER BY t.date_submitted DESC LIMIT ? OFFSET ?";
 $params[] = $limit;
 $params[] = $offset;
 $types .= "ii";
@@ -109,9 +109,9 @@ while ($row = $result->fetch_assoc()) {
 }
 $stmt->close();
 
-// Get unique years for filter dropdown (from created_at)
+// Get unique years for filter dropdown (from date_submitted)
 $years = [];
-$yearQuery = "SELECT DISTINCT YEAR(created_at) as year FROM theses WHERE status = 'archived' ORDER BY year DESC";
+$yearQuery = "SELECT DISTINCT YEAR(date_submitted) as year FROM thesis_table WHERE status = 'approved' ORDER BY year DESC";
 $yearResult = $conn->query($yearQuery);
 if ($yearResult) {
     while ($row = $yearResult->fetch_assoc()) {
@@ -121,7 +121,7 @@ if ($yearResult) {
 
 // Get unique departments for filter dropdown
 $departments = [];
-$deptQuery = "SELECT DISTINCT department FROM theses WHERE department IS NOT NULL AND department != '' AND status = 'archived' ORDER BY department";
+$deptQuery = "SELECT DISTINCT department FROM thesis_table WHERE department IS NOT NULL AND department != '' AND status = 'approved' ORDER BY department";
 $deptResult = $conn->query($deptQuery);
 if ($deptResult) {
     while ($row = $deptResult->fetch_assoc()) {
@@ -981,7 +981,7 @@ if ($deptResult) {
 
         <!-- Results Info -->
         <div class="results-info">
-            <p>Found <strong><?= $totalTheses ?></strong> archived thesis</p>
+            <p>Found <strong><?= $totalTheses ?></strong> approved theses</p>
             <?php if ($totalPages > 1): ?>
                 <p>Page <strong><?= $page ?></strong> of <strong><?= $totalPages ?></strong></p>
             <?php endif; ?>
@@ -1010,7 +1010,7 @@ if ($deptResult) {
                         <div class="thesis-meta">
                             <span><i class="fas fa-user"></i> <?= htmlspecialchars($thesis['first_name'] . ' ' . $thesis['last_name']) ?></span>
                             <span><i class="fas fa-building"></i> <?= htmlspecialchars($thesis['department'] ?? 'N/A') ?></span>
-                            <span><i class="fas fa-calendar"></i> <?= date('F Y', strtotime($thesis['created_at'])) ?></span>
+                            <span><i class="fas fa-calendar"></i> <?= date('F Y', strtotime($thesis['date_submitted'])) ?></span>
                         </div>
                         
                         <p class="thesis-abstract">

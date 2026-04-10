@@ -74,7 +74,6 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action']) && $_POST['a
     $role_id = $_POST['role_id'];
     $status = $_POST['status'];
     
-    // Check if username or email already exists
     $check = $conn->prepare("SELECT user_id FROM user_table WHERE username = ? OR email = ?");
     $check->bind_param("ss", $username, $email);
     $check->execute();
@@ -111,7 +110,6 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action']) && $_POST['a
     $role_id = $_POST['role_id'];
     $status = $_POST['status'];
     
-    // Check if username or email already exists for other users
     $check = $conn->prepare("SELECT user_id FROM user_table WHERE (username = ? OR email = ?) AND user_id != ?");
     $check->bind_param("ssi", $username, $email, $user_id_edit);
     $check->execute();
@@ -121,7 +119,6 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action']) && $_POST['a
         $message = "Username or email already exists for another user!";
         $message_type = "error";
     } else {
-        // Check if password is provided
         if (!empty($_POST['password'])) {
             $password = password_hash($_POST['password'], PASSWORD_DEFAULT);
             $stmt = $conn->prepare("UPDATE user_table SET first_name=?, last_name=?, email=?, username=?, password=?, role_id=?, status=? WHERE user_id=?");
@@ -148,12 +145,10 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action']) && $_POST['a
 if (isset($_GET['delete'])) {
     $delete_id = $_GET['delete'];
     
-    // Don't allow deleting own account
     if ($delete_id == $_SESSION['user_id']) {
         $message = "You cannot delete your own account!";
         $message_type = "error";
     } else {
-        // Get user info for log
         $user_info = $conn->prepare("SELECT first_name, last_name FROM user_table WHERE user_id = ?");
         $user_info->bind_param("i", $delete_id);
         $user_info->execute();
@@ -185,7 +180,6 @@ if (isset($_GET['toggle'])) {
     $stmt->bind_param("si", $new_status, $toggle_id);
     
     if ($stmt->execute()) {
-        // Get user info for log
         $user_info = $conn->prepare("SELECT first_name, last_name FROM user_table WHERE user_id = ?");
         $user_info->bind_param("i", $toggle_id);
         $user_info->execute();
@@ -281,14 +275,17 @@ $total_users = $conn->query("SELECT COUNT(*) as c FROM user_table")->fetch_assoc
 $active_users = $conn->query("SELECT COUNT(*) as c FROM user_table WHERE status = 'Active'")->fetch_assoc()['c'];
 $inactive_users = $total_users - $active_users;
 
-// GET NOTIFICATION COUNT
+// ==================== GET NOTIFICATION COUNT - FIXED ====================
 $notificationCount = 0;
 $notif_check = $conn->query("SHOW TABLES LIKE 'notifications'");
 if ($notif_check && $notif_check->num_rows) {
-    $n = $conn->prepare("SELECT COUNT(*) as c FROM notifications WHERE user_id = ? AND is_read = 0");
+    $n = $conn->prepare("SELECT COUNT(*) as c FROM notifications WHERE user_id = ? AND status = 0");
     $n->bind_param("i", $user_id);
     $n->execute();
-    $notificationCount = $n->get_result()->fetch_assoc()['c'];
+    $result = $n->get_result();
+    if ($row = $result->fetch_assoc()) {
+        $notificationCount = $row['c'];
+    }
     $n->close();
 }
 ?>
@@ -305,7 +302,6 @@ if ($notif_check && $notif_check->num_rows) {
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: 'Inter', sans-serif; background: #fef2f2; color: #1f2937; overflow-x: hidden; }
         
-        /* Top Navigation - full width */
         .top-nav { position: fixed; top: 0; right: 0; left: 0; height: 70px; background: white; display: flex; align-items: center; justify-content: space-between; padding: 0 32px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); z-index: 99; border-bottom: 1px solid #ffcdd2; }
         .nav-left { display: flex; align-items: center; gap: 24px; }
         .hamburger { display: flex; flex-direction: column; gap: 5px; width: 40px; height: 40px; background: #fef2f2; border: none; border-radius: 8px; cursor: pointer; padding: 12px; align-items: center; justify-content: center; }
@@ -332,7 +328,6 @@ if ($notif_check && $notif_check->num_rows) {
         .profile-dropdown a:hover { background: #ffebee; color: #dc2626; }
         .profile-dropdown hr { margin: 0; border-color: #ffcdd2; }
         
-        /* Sidebar */
         .sidebar { position: fixed; top: 0; left: -300px; width: 280px; height: 100%; background: linear-gradient(180deg, #b71c1c 0%, #d32f2f 100%); display: flex; flex-direction: column; z-index: 1000; transition: left 0.3s ease; box-shadow: 4px 0 15px rgba(0,0,0,0.1); }
         .sidebar.open { left: 0; }
         .logo-container { padding: 28px 24px; border-bottom: 1px solid rgba(255,255,255,0.2); text-align: center; }
@@ -407,7 +402,6 @@ if ($notif_check && $notif_check->num_rows) {
         .action-btn.delete { color: #ef4444; }
         .action-btn.delete:hover { background: #fef2f2; transform: scale(1.05); }
         
-        /* Modal */
         .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1100; align-items: center; justify-content: center; }
         .modal.show { display: flex; }
         .modal-content { background: white; border-radius: 20px; width: 500px; max-width: 90%; animation: slideUp 0.3s; }
@@ -430,7 +424,6 @@ if ($notif_check && $notif_check->num_rows) {
         .empty-state { text-align: center; padding: 60px; color: #6b7280; }
         .empty-state i { font-size: 3rem; margin-bottom: 15px; color: #d32f2f; }
         
-        /* Alert Message */
         .alert { padding: 12px 20px; border-radius: 10px; margin-bottom: 20px; display: flex; align-items: center; gap: 10px; }
         .alert-success { background: #e8f5e9; color: #2e7d32; border: 1px solid #a5d6a7; }
         .alert-error { background: #ffebee; color: #c62828; border: 1px solid #ffcdd2; }
@@ -439,7 +432,6 @@ if ($notif_check && $notif_check->num_rows) {
         @keyframes fadeIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
         @keyframes slideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
         
-        /* Dark Mode */
         body.dark-mode { background: #0f172a; }
         body.dark-mode .top-nav { background: #1e293b; border-bottom-color: #334155; }
         body.dark-mode .logo { color: #fecaca; }
@@ -555,22 +547,15 @@ if ($notif_check && $notif_check->num_rows) {
             <div class="table-responsive">
                 <table class="users-table">
                     <thead>
-                        
-                            <th>#</th>
-                            <th>User Name</th>
-                            <th>Email</th>
-                            <th>Username</th>
-                            <th>Role</th>
-                            <th>Status</th>
-                            <th>Actions</th>
-                        </thead>
+                        <tr><th>#</th><th>User Name</th><th>Email</th><th>Username</th><th>Role</th><th>Status</th><th>Actions</th></tr>
+                    </thead>
                     <tbody id="usersTableBody">
                         <?php if ($users->num_rows == 0): ?>
-                        <td colspan="7" class="empty-state"><i class="fas fa-users-slash"></i><p>No users found</p></td>60
+                            <tr><td colspan="7" class="empty-state"><i class="fas fa-users-slash"></i><p>No users found</p></td></tr>
                         <?php else: ?>
                             <?php $counter = 1; ?>
                             <?php while ($user = $users->fetch_assoc()): ?>
-                            
+                            <tr>
                                 <td>#<?= $counter++ ?></td>
                                 <td><div class="user-name-cell"><div class="user-avatar-small"><?= strtoupper(substr($user['first_name'], 0, 1) . substr($user['last_name'], 0, 1)) ?></div><span><?= htmlspecialchars($user['first_name'] . ' ' . $user['last_name']) ?></span></div></td>
                                 <td><?= htmlspecialchars($user['email']) ?></td>
@@ -603,53 +588,21 @@ if ($notif_check && $notif_check->num_rows) {
                     <input type="hidden" id="user_id" name="user_id">
                     <input type="hidden" id="form_action" name="action" value="add">
                     <div class="form-row">
-                        <div class="form-group">
-                            <label>First Name</label>
-                            <input type="text" id="first_name" name="first_name" required>
-                        </div>
-                        <div class="form-group">
-                            <label>Last Name</label>
-                            <input type="text" id="last_name" name="last_name" required>
-                        </div>
+                        <div class="form-group"><label>First Name</label><input type="text" id="first_name" name="first_name" required></div>
+                        <div class="form-group"><label>Last Name</label><input type="text" id="last_name" name="last_name" required></div>
                     </div>
-                    <div class="form-group">
-                        <label>Email</label>
-                        <input type="email" id="email" name="email" required>
-                    </div>
-                    <div class="form-group">
-                        <label>Username</label>
-                        <input type="text" id="username" name="username" required>
-                    </div>
-                    <div class="form-group">
-                        <label>Password</label>
-                        <input type="password" id="password" name="password" placeholder="Leave blank to keep current password">
-                    </div>
-                    <div class="form-group">
-                        <label>Role</label>
-                        <select id="role_id" name="role_id" required>
-                            <?php foreach ($roles as $id => $name): ?>
-                                <option value="<?= $id ?>"><?= htmlspecialchars($name) ?></option>
-                            <?php endforeach; ?>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label>Status</label>
-                        <select id="status" name="status">
-                            <option value="Active">Active</option>
-                            <option value="Inactive">Inactive</option>
-                        </select>
-                    </div>
+                    <div class="form-group"><label>Email</label><input type="email" id="email" name="email" required></div>
+                    <div class="form-group"><label>Username</label><input type="text" id="username" name="username" required></div>
+                    <div class="form-group"><label>Password</label><input type="password" id="password" name="password" placeholder="Leave blank to keep current password"></div>
+                    <div class="form-group"><label>Role</label><select id="role_id" name="role_id" required><?php foreach ($roles as $id => $name): ?><option value="<?= $id ?>"><?= htmlspecialchars($name) ?></option><?php endforeach; ?></select></div>
+                    <div class="form-group"><label>Status</label><select id="status" name="status"><option value="Active">Active</option><option value="Inactive">Inactive</option></select></div>
                 </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn-cancel" onclick="closeModal()">Cancel</button>
-                    <button type="submit" class="btn-save">Save User</button>
-                </div>
+                <div class="modal-footer"><button type="button" class="btn-cancel" onclick="closeModal()">Cancel</button><button type="submit" class="btn-save">Save User</button></div>
             </form>
         </div>
     </div>
     
     <script>
-        // DOM Elements
         const hamburgerBtn = document.getElementById('hamburgerBtn');
         const sidebar = document.getElementById('sidebar');
         const sidebarOverlay = document.getElementById('sidebarOverlay');
@@ -668,7 +621,6 @@ if ($notif_check && $notif_check->num_rows) {
         const userForm = document.getElementById('userForm');
         const formAction = document.getElementById('form_action');
 
-        // ==================== SIDEBAR FUNCTIONS ====================
         function openSidebar() { sidebar.classList.add('open'); sidebarOverlay.classList.add('show'); document.body.style.overflow = 'hidden'; }
         function closeSidebar() { sidebar.classList.remove('open'); sidebarOverlay.classList.remove('show'); document.body.style.overflow = ''; }
         function toggleSidebar(e) { e.stopPropagation(); if (sidebar.classList.contains('open')) closeSidebar(); else openSidebar(); }
@@ -685,13 +637,11 @@ if ($notif_check && $notif_check->num_rows) {
 
         window.addEventListener('resize', function() { if (window.innerWidth > 768 && sidebar.classList.contains('open')) closeSidebar(); });
 
-        // ==================== PROFILE DROPDOWN ====================
         if (profileWrapper && profileDropdown) {
             profileWrapper.addEventListener('click', function(e) { e.stopPropagation(); profileDropdown.classList.toggle('show'); });
             document.addEventListener('click', function(e) { if (profileDropdown.classList.contains('show') && !profileWrapper.contains(e.target)) profileDropdown.classList.remove('show'); });
         }
 
-        // ==================== DARK MODE ====================
         function initDarkMode() {
             const isDark = localStorage.getItem('darkMode') === 'true';
             if (isDark) { document.body.classList.add('dark-mode'); if (darkModeToggle) darkModeToggle.checked = true; }
@@ -703,7 +653,6 @@ if ($notif_check && $notif_check->num_rows) {
             }
         }
 
-        // ==================== FILTER FUNCTIONS ====================
         function applyFilter() {
             const search = searchInput ? searchInput.value.trim() : '';
             const role = roleFilter ? roleFilter.value : '';
@@ -725,7 +674,6 @@ if ($notif_check && $notif_check->num_rows) {
         }
         if (searchInput) { searchInput.addEventListener('keypress', function(e) { if (e.key === 'Enter') applyFilter(); }); }
 
-        // ==================== MODAL FUNCTIONS ====================
         function openModal() { userModal.classList.add('show'); }
         function closeModal() { userModal.classList.remove('show'); userForm.reset(); document.getElementById('user_id').value = ''; formAction.value = 'add'; modalTitle.textContent = 'Add New User'; }
 

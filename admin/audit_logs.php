@@ -158,14 +158,17 @@ $unique_users = $conn->query("SELECT COUNT(DISTINCT user_id) as c FROM audit_log
 $today_logs = $conn->query("SELECT COUNT(*) as c FROM audit_logs WHERE DATE(created_at) = CURDATE()")->fetch_assoc()['c'] ?? 0;
 $this_week = $conn->query("SELECT COUNT(*) as c FROM audit_logs WHERE WEEK(created_at) = WEEK(CURDATE())")->fetch_assoc()['c'] ?? 0;
 
-// GET NOTIFICATION COUNT
+// ==================== GET NOTIFICATION COUNT - FIXED ====================
 $notificationCount = 0;
 $notif_check = $conn->query("SHOW TABLES LIKE 'notifications'");
 if ($notif_check && $notif_check->num_rows) {
-    $n = $conn->prepare("SELECT COUNT(*) as c FROM notifications WHERE user_id = ? AND is_read = 0");
+    $n = $conn->prepare("SELECT COUNT(*) as c FROM notifications WHERE user_id = ? AND status = 0");
     $n->bind_param("i", $user_id);
     $n->execute();
-    $notificationCount = $n->get_result()->fetch_assoc()['c'];
+    $result = $n->get_result();
+    if ($row = $result->fetch_assoc()) {
+        $notificationCount = $row['c'];
+    }
     $n->close();
 }
 
@@ -193,45 +196,12 @@ $conn->close();
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: 'Inter', sans-serif; background: #fef2f2; color: #1f2937; overflow-x: hidden; }
         
-        /* Top Navigation - full width */
         .top-nav { 
-            position: fixed; 
-            top: 0; 
-            right: 0; 
-            left: 0; 
-            height: 70px; 
-            background: white; 
-            display: flex; 
-            align-items: center; 
-            justify-content: space-between; 
-            padding: 0 32px; 
-            box-shadow: 0 2px 10px rgba(0,0,0,0.05); 
-            z-index: 99; 
-            border-bottom: 1px solid #ffcdd2; 
+            position: fixed; top: 0; right: 0; left: 0; height: 70px; background: white; display: flex; align-items: center; justify-content: space-between; padding: 0 32px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); z-index: 99; border-bottom: 1px solid #ffcdd2; 
         }
         .nav-left { display: flex; align-items: center; gap: 24px; }
-        .hamburger { 
-            display: flex; 
-            flex-direction: column; 
-            gap: 5px; 
-            width: 40px; 
-            height: 40px; 
-            background: #fef2f2; 
-            border: none; 
-            border-radius: 8px; 
-            cursor: pointer; 
-            padding: 12px;
-            align-items: center;
-            justify-content: center;
-        }
-        .hamburger span { 
-            display: block; 
-            width: 20px; 
-            height: 2px; 
-            background: #dc2626; 
-            border-radius: 2px; 
-            transition: 0.3s;
-        }
+        .hamburger { display: flex; flex-direction: column; gap: 5px; width: 40px; height: 40px; background: #fef2f2; border: none; border-radius: 8px; cursor: pointer; padding: 12px; align-items: center; justify-content: center; }
+        .hamburger span { display: block; width: 20px; height: 2px; background: #dc2626; border-radius: 2px; transition: 0.3s; }
         .hamburger:hover { background: #fee2e2; }
         .logo { font-size: 1.3rem; font-weight: 700; color: #d32f2f; }
         .logo span { color: #d32f2f; }
@@ -239,6 +209,7 @@ $conn->close();
         .search-area i { color: #dc2626; }
         .search-area input { border: none; background: none; outline: none; font-size: 0.85rem; width: 220px; }
         .nav-right { display: flex; align-items: center; gap: 20px; }
+        
         .profile-wrapper { position: relative; }
         .profile-trigger { display: flex; align-items: center; gap: 12px; cursor: pointer; padding: 5px 12px; border-radius: 40px; transition: background 0.3s; }
         .profile-trigger:hover { background: #ffebee; }
@@ -250,22 +221,8 @@ $conn->close();
         .profile-dropdown a:hover { background: #ffebee; color: #dc2626; }
         .profile-dropdown hr { margin: 0; border-color: #ffcdd2; }
         
-        /* Sidebar - COLLAPSIBLE MENU BAR (hidden by default) */
-        .sidebar { 
-            position: fixed; 
-            top: 0; 
-            left: -300px;  /* hidden by default */
-            width: 280px; 
-            height: 100%; 
-            background: linear-gradient(180deg, #b71c1c 0%, #d32f2f 100%); 
-            display: flex; 
-            flex-direction: column; 
-            z-index: 1000; 
-            transition: left 0.3s ease; 
-            box-shadow: 4px 0 15px rgba(0,0,0,0.1); 
-        }
-        .sidebar.open { left: 0; }  /* show when open class added */
-        
+        .sidebar { position: fixed; top: 0; left: -300px; width: 280px; height: 100%; background: linear-gradient(180deg, #b71c1c 0%, #d32f2f 100%); display: flex; flex-direction: column; z-index: 1000; transition: left 0.3s ease; box-shadow: 4px 0 15px rgba(0,0,0,0.1); }
+        .sidebar.open { left: 0; }
         .logo-container { padding: 28px 24px; border-bottom: 1px solid rgba(255,255,255,0.2); text-align: center; }
         .logo-container .logo { color: white; font-size: 1.4rem; }
         .logo-container .logo span { color: #ffcdd2; }
@@ -292,32 +249,14 @@ $conn->close();
         .logout-btn { display: flex; align-items: center; gap: 12px; padding: 10px 12px; text-decoration: none; color: #ffebee; border-radius: 10px; transition: all 0.2s; }
         .logout-btn:hover { background: rgba(255,255,255,0.15); color: white; }
         
-        /* Main Content - full width (no margin) */
-        .main-content { 
-            margin-left: 0; 
-            margin-top: 70px; 
-            padding: 30px; 
-            transition: margin-left 0.3s; 
-        }
-        
-        /* Overlay when sidebar is open */
-        .sidebar-overlay { 
-            position: fixed; 
-            top: 0; 
-            left: 0; 
-            width: 100%; 
-            height: 100%; 
-            background: rgba(0,0,0,0.5); 
-            z-index: 999; 
-            display: none; 
-        }
+        .main-content { margin-left: 0; margin-top: 70px; padding: 30px; transition: margin-left 0.3s; }
+        .sidebar-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 999; display: none; }
         .sidebar-overlay.show { display: block; }
         
         .page-header { margin-bottom: 30px; }
         .page-header h1 { font-size: 1.8rem; font-weight: 700; color: #d32f2f; display: flex; align-items: center; gap: 12px; }
         .page-header p { color: #6b7280; margin-top: 5px; }
         
-        /* Stats Cards */
         .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 25px; margin-bottom: 30px; }
         .stat-card { background: white; border-radius: 20px; padding: 22px 20px; display: flex; align-items: center; gap: 18px; border: 1px solid #ffcdd2; transition: all 0.3s; }
         .stat-card:hover { transform: translateY(-3px); box-shadow: 0 10px 25px rgba(211,47,47,0.1); }
@@ -325,7 +264,6 @@ $conn->close();
         .stat-details h3 { font-size: 1.8rem; font-weight: 700; color: #d32f2f; margin-bottom: 5px; }
         .stat-details p { font-size: 0.8rem; color: #6b7280; }
         
-        /* Filter Bar */
         .filter-bar { background: white; border-radius: 20px; padding: 20px; margin-bottom: 25px; border: 1px solid #ffcdd2; display: flex; flex-wrap: wrap; gap: 15px; align-items: center; }
         .filter-select { padding: 10px 16px; border-radius: 40px; border: 1px solid #ffcdd2; background: #f8f9fa; font-size: 0.85rem; cursor: pointer; }
         .date-input { padding: 10px 16px; border-radius: 40px; border: 1px solid #ffcdd2; background: #f8f9fa; font-size: 0.85rem; }
@@ -334,7 +272,6 @@ $conn->close();
         .clear-btn { background: #fef2f2; color: #6b7280; border: 1px solid #ffcdd2; padding: 10px 20px; border-radius: 40px; cursor: pointer; font-weight: 500; transition: all 0.2s; }
         .clear-btn:hover { background: #fee2e2; }
         
-        /* Logs Table */
         .logs-section { background: white; border-radius: 20px; padding: 25px; border: 1px solid #ffcdd2; }
         .table-responsive { overflow-x: auto; }
         .logs-table { width: 100%; border-collapse: collapse; }
@@ -365,7 +302,6 @@ $conn->close();
             .stat-details h3 { font-size: 1.4rem; } 
         }
         
-        /* Dark Mode */
         body.dark-mode { background: #0f172a; }
         body.dark-mode .top-nav { background: #1e293b; border-bottom-color: #334155; }
         body.dark-mode .logo { color: #fecaca; }
@@ -391,16 +327,9 @@ $conn->close();
     
     <header class="top-nav">
         <div class="nav-left">
-            <button class="hamburger" id="hamburgerBtn">
-                <span></span>
-                <span></span>
-                <span></span>
-            </button>
+            <button class="hamburger" id="hamburgerBtn"><span></span><span></span><span></span></button>
             <div class="logo">Thesis<span>Manager</span></div>
-            <div class="search-area">
-                <i class="fas fa-search"></i>
-                <input type="text" id="searchInput" placeholder="Search logs...">
-            </div>
+            <div class="search-area"><i class="fas fa-search"></i><input type="text" id="searchInput" placeholder="Search logs..."></div>
         </div>
         <div class="nav-right">
             <div class="profile-wrapper" id="profileWrapper">
@@ -419,19 +348,14 @@ $conn->close();
     </header>
     
     <aside class="sidebar" id="sidebar">
-        <div class="logo-container">
-            <div class="logo">Thesis<span>Manager</span></div>
-            <div class="admin-label">ADMINISTRATOR</div>
-        </div>
+        <div class="logo-container"><div class="logo">Thesis<span>Manager</span></div><div class="admin-label">ADMINISTRATOR</div></div>
         <div class="nav-menu">
             <a href="admindashboard.php" class="nav-item"><i class="fas fa-th-large"></i><span>Dashboard</span></a>
             <a href="users.php" class="nav-item"><i class="fas fa-users"></i><span>Users</span></a>
             <a href="audit_logs.php" class="nav-item active"><i class="fas fa-history"></i><span>Audit Logs</span></a>
         </div>
         <div class="dashboard-links">
-            <div class="dashboard-links-header">
-                <i class="fas fa-chalkboard-user"></i><span>Quick Access</span>
-            </div>
+            <div class="dashboard-links-header"><i class="fas fa-chalkboard-user"></i><span>Quick Access</span></div>
             <?php foreach ($dashboards as $dashboard): ?>
             <a href="/ArchivingThesis/<?= $dashboard['folder'] ?>/<?= $dashboard['file'] ?>" class="dashboard-link" target="_blank">
                 <i class="fas <?= $dashboard['icon'] ?>" style="color: <?= $dashboard['color'] ?>"></i>
@@ -441,17 +365,8 @@ $conn->close();
             <?php endforeach; ?>
         </div>
         <div class="nav-footer">
-            <div class="theme-toggle">
-                <input type="checkbox" id="darkmode">
-                <label for="darkmode" class="toggle-label">
-                    <i class="fas fa-sun"></i>
-                    <i class="fas fa-moon"></i>
-                    <span class="slider"></span>
-                </label>
-            </div>
-            <a href="/ArchivingThesis/authentication/logout.php" class="logout-btn">
-                <i class="fas fa-sign-out-alt"></i><span>Logout</span>
-            </a>
+            <div class="theme-toggle"><input type="checkbox" id="darkmode"><label for="darkmode" class="toggle-label"><i class="fas fa-sun"></i><i class="fas fa-moon"></i><span class="slider"></span></label></div>
+            <a href="/ArchivingThesis/authentication/logout.php" class="logout-btn"><i class="fas fa-sign-out-alt"></i><span>Logout</span></a>
         </div>
     </aside>
     
@@ -462,34 +377,10 @@ $conn->close();
         </div>
         
         <div class="stats-grid">
-            <div class="stat-card">
-                <div class="stat-icon"><i class="fas fa-chart-line"></i></div>
-                <div class="stat-details">
-                    <h3><?= number_format($total_logs) ?></h3>
-                    <p>Total Logs</p>
-                </div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-icon"><i class="fas fa-users"></i></div>
-                <div class="stat-details">
-                    <h3><?= number_format($unique_users) ?></h3>
-                    <p>Unique Users</p>
-                </div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-icon"><i class="fas fa-calendar-day"></i></div>
-                <div class="stat-details">
-                    <h3><?= number_format($today_logs) ?></h3>
-                    <p>Today's Logs</p>
-                </div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-icon"><i class="fas fa-calendar-week"></i></div>
-                <div class="stat-details">
-                    <h3><?= number_format($this_week) ?></h3>
-                    <p>This Week</p>
-                </div>
-            </div>
+            <div class="stat-card"><div class="stat-icon"><i class="fas fa-chart-line"></i></div><div class="stat-details"><h3><?= number_format($total_logs) ?></h3><p>Total Logs</p></div></div>
+            <div class="stat-card"><div class="stat-icon"><i class="fas fa-users"></i></div><div class="stat-details"><h3><?= number_format($unique_users) ?></h3><p>Unique Users</p></div></div>
+            <div class="stat-card"><div class="stat-icon"><i class="fas fa-calendar-day"></i></div><div class="stat-details"><h3><?= number_format($today_logs) ?></h3><p>Today's Logs</p></div></div>
+            <div class="stat-card"><div class="stat-icon"><i class="fas fa-calendar-week"></i></div><div class="stat-details"><h3><?= number_format($this_week) ?></h3><p>This Week</p></div></div>
         </div>
         
         <div class="filter-bar">
@@ -510,24 +401,11 @@ $conn->close();
             <div class="table-responsive">
                 <table class="logs-table">
                     <thead>
-                        <tr>
-                            <th>User</th>
-                            <th>Action</th>
-                            <th>Table</th>
-                            <th>Record ID</th>
-                            <th>Description</th>
-                            <th>IP Address</th>
-                            <th>Date & Time</th>
-                        </tr>
+                        <tr><th>User</th><th>Action</th><th>Table</th><th>Record ID</th><th>Description</th><th>IP Address</th><th>Date & Time</th></tr>
                     </thead>
                     <tbody id="logsTableBody">
                         <?php if (empty($logs)): ?>
-                        <tr>
-                            <td colspan="7" class="empty-state">
-                                <i class="fas fa-database"></i>
-                                <p>No audit logs found</p>
-                            </td>
-                        </tr>
+                        <tr><td colspan="7" class="empty-state"><i class="fas fa-database"></i><p>No audit logs found</p></td></tr>
                         <?php else: ?>
                         <?php foreach ($logs as $log): ?>
                         <tr>
@@ -548,7 +426,6 @@ $conn->close();
     </main>
     
     <script>
-        // DOM Elements
         const hamburgerBtn = document.getElementById('hamburgerBtn');
         const sidebar = document.getElementById('sidebar');
         const sidebarOverlay = document.getElementById('sidebarOverlay');
@@ -562,39 +439,12 @@ $conn->close();
         const applyFilters = document.getElementById('applyFilters');
         const clearFilters = document.getElementById('clearFilters');
         
-        // Sidebar Toggle Function
-        function openSidebar() {
-            sidebar.classList.add('open');
-            sidebarOverlay.classList.add('show');
-            document.body.style.overflow = 'hidden';
-        }
+        function openSidebar() { sidebar.classList.add('open'); sidebarOverlay.classList.add('show'); document.body.style.overflow = 'hidden'; }
+        function closeSidebar() { sidebar.classList.remove('open'); sidebarOverlay.classList.remove('show'); document.body.style.overflow = ''; }
+        function toggleSidebar(e) { e.stopPropagation(); if (sidebar.classList.contains('open')) closeSidebar(); else openSidebar(); }
+        if (hamburgerBtn) hamburgerBtn.addEventListener('click', toggleSidebar);
+        if (sidebarOverlay) sidebarOverlay.addEventListener('click', closeSidebar);
         
-        function closeSidebar() {
-            sidebar.classList.remove('open');
-            sidebarOverlay.classList.remove('show');
-            document.body.style.overflow = '';
-        }
-        
-        function toggleSidebar(e) {
-            e.stopPropagation();
-            if (sidebar.classList.contains('open')) {
-                closeSidebar();
-            } else {
-                openSidebar();
-            }
-        }
-        
-        // Hamburger Button Event
-        if (hamburgerBtn) {
-            hamburgerBtn.addEventListener('click', toggleSidebar);
-        }
-        
-        // Close sidebar when clicking overlay
-        if (sidebarOverlay) {
-            sidebarOverlay.addEventListener('click', closeSidebar);
-        }
-        
-        // Close sidebar on Escape key
         document.addEventListener('keydown', function(e) {
             if (e.key === 'Escape') {
                 if (sidebar.classList.contains('open')) closeSidebar();
@@ -602,47 +452,24 @@ $conn->close();
             }
         });
         
-        // Close sidebar on window resize (if screen becomes larger)
-        window.addEventListener('resize', function() {
-            if (window.innerWidth > 768 && sidebar.classList.contains('open')) {
-                closeSidebar();
-            }
-        });
+        window.addEventListener('resize', function() { if (window.innerWidth > 768 && sidebar.classList.contains('open')) closeSidebar(); });
         
-        // Profile Dropdown
         if (profileWrapper && profileDropdown) {
-            profileWrapper.addEventListener('click', function(e) {
-                e.stopPropagation();
-                profileDropdown.classList.toggle('show');
-            });
-            document.addEventListener('click', function(e) {
-                if (profileDropdown.classList.contains('show') && !profileWrapper.contains(e.target)) {
-                    profileDropdown.classList.remove('show');
-                }
-            });
+            profileWrapper.addEventListener('click', function(e) { e.stopPropagation(); profileDropdown.classList.toggle('show'); });
+            document.addEventListener('click', function(e) { if (profileDropdown.classList.contains('show') && !profileWrapper.contains(e.target)) profileDropdown.classList.remove('show'); });
         }
         
-        // Dark Mode
         function initDarkMode() {
             const isDark = localStorage.getItem('darkMode') === 'true';
-            if (isDark) {
-                document.body.classList.add('dark-mode');
-                if (darkModeToggle) darkModeToggle.checked = true;
-            }
+            if (isDark) { document.body.classList.add('dark-mode'); if (darkModeToggle) darkModeToggle.checked = true; }
             if (darkModeToggle) {
                 darkModeToggle.addEventListener('change', function() {
-                    if (this.checked) {
-                        document.body.classList.add('dark-mode');
-                        localStorage.setItem('darkMode', 'true');
-                    } else {
-                        document.body.classList.remove('dark-mode');
-                        localStorage.setItem('darkMode', 'false');
-                    }
+                    if (this.checked) { document.body.classList.add('dark-mode'); localStorage.setItem('darkMode', 'true'); }
+                    else { document.body.classList.remove('dark-mode'); localStorage.setItem('darkMode', 'false'); }
                 });
             }
         }
         
-        // Filter Functions
         function applyFilter() {
             const search = searchInputFilter ? searchInputFilter.value.trim() : '';
             const action = actionFilter ? actionFilter.value : '';
@@ -656,16 +483,11 @@ $conn->close();
             window.location.href = url;
         }
         
-        function clearAllFilters() {
-            window.location.href = window.location.pathname;
-        }
-        
+        function clearAllFilters() { window.location.href = window.location.pathname; }
         if (applyFilters) applyFilters.addEventListener('click', applyFilter);
         if (clearFilters) clearFilters.addEventListener('click', clearAllFilters);
         
-        // Initialize
         initDarkMode();
-        
         console.log('Audit Logs Page Loaded - Menu Bar Style Sidebar');
     </script>
 </body>

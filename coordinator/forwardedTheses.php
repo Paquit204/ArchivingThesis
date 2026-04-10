@@ -22,38 +22,44 @@ $department_name = "Research Department";
 $position = "Research Coordinator";
 $assigned_date = date('F Y');
 
-// Get forwarded theses from database (status = 'Approved' or 'Forwarded to Dean')
-$forwardedTheses = [];
-$theses_query = "SELECT thesis_id, title, author, department, year, status, created_at 
-                 FROM theses 
-                 WHERE status = 'Approved' OR status = 'Forwarded to Dean' 
-                 ORDER BY created_at DESC";
-$theses_result = $conn->query($theses_query);
+// CHECK IF THESIS_TABLE EXISTS
+$thesis_table_exists = false;
+$check_thesis = $conn->query("SHOW TABLES LIKE 'thesis_table'");
+if ($check_thesis && $check_thesis->num_rows > 0) {
+    $thesis_table_exists = true;
+}
 
-if ($theses_result && $theses_result->num_rows > 0) {
-    while ($row = $theses_result->fetch_assoc()) {
-        $status = $row['status'];
-        $status_display = $status;
-        
-        // Map status to display
-        if ($status == 'Approved') {
-            $status_display = 'Approved';
-        } elseif ($status == 'Forwarded to Dean') {
-            $status_display = 'Under Review';
-        } else {
-            $status_display = 'Pending';
+// Get forwarded theses from database (status = 'forwarded_to_dean')
+$forwardedTheses = [];
+if ($thesis_table_exists) {
+    $theses_query = "SELECT thesis_id, title, adviser, department, year, status, date_submitted 
+                     FROM thesis_table 
+                     WHERE status = 'forwarded_to_dean'
+                     ORDER BY date_submitted DESC";
+    $theses_result = $conn->query($theses_query);
+    
+    if ($theses_result && $theses_result->num_rows > 0) {
+        while ($row = $theses_result->fetch_assoc()) {
+            $status = $row['status'];
+            $status_display = $status;
+            
+            if ($status == 'forwarded_to_dean') {
+                $status_display = 'Under Review';
+            } else {
+                $status_display = 'Pending';
+            }
+            
+            $forwardedTheses[] = [
+                'id' => $row['thesis_id'],
+                'title' => $row['title'],
+                'author' => $row['adviser'] ?? 'Unknown',
+                'department' => $row['department'] ?? 'Unknown',
+                'year' => $row['year'] ?? 'N/A',
+                'date_forwarded' => $row['date_submitted'],
+                'status' => $status_display,
+                'raw_status' => $row['status']
+            ];
         }
-        
-        $forwardedTheses[] = [
-            'id' => $row['thesis_id'],
-            'title' => $row['title'],
-            'author' => $row['author'] ?? 'Unknown',
-            'department' => $row['department'] ?? 'Unknown',
-            'year' => $row['year'] ?? 'N/A',
-            'date_forwarded' => $row['created_at'],
-            'status' => $status_display,
-            'raw_status' => $row['status']
-        ];
     }
 }
 
@@ -885,7 +891,7 @@ $currentPage = basename($_SERVER['PHP_SELF']);
                     <thead>
                         <tr>
                             <th>Thesis Title</th>
-                            <th>Author</th>
+                            <th>Author (Adviser)</th>
                             <th>Date Forwarded</th>
                             <th>Status</th>
                             <th>Action</th>
@@ -917,14 +923,14 @@ $currentPage = basename($_SERVER['PHP_SELF']);
                                     </span>
                                 </td>
                                 <td class="action-buttons">
-                                    <a href="viewThesis.php?id=<?= $thesis['id'] ?>" class="btn-view">
+                                    <a href="reviewThesis.php?id=<?= $thesis['id'] ?>" class="btn-view">
                                         <i class="fas fa-eye"></i> View
                                     </a>
-                                </td>
-                            </tr>
+                                 </td>
+                             </tr>
                         <?php endforeach; ?>
                     </tbody>
-                </table>
+                 </table>
             <?php endif; ?>
         </div>
     </main>
@@ -1053,7 +1059,7 @@ $currentPage = basename($_SERVER['PHP_SELF']);
         // ==================== INITIALIZE ====================
         initDarkMode();
         
-        console.log('Forwarded Theses Page Initialized - Menu Bar Style Sidebar');
+        console.log('Forwarded Theses Page Initialized - Using thesis_table');
     </script>
 </body>
 </html>

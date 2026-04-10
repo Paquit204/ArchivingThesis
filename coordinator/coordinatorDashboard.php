@@ -13,6 +13,44 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role']) || $_SESSION['role
 
 $user_id = $_SESSION['user_id'];
 
+// ========== DEBUGGING - CHECK NOTIFICATIONS ==========
+error_log("=== COORDINATOR DEBUG START ===");
+error_log("User ID from session: " . $user_id);
+
+// Check if user exists and get role_id
+$userCheck = $conn->query("SELECT user_id, first_name, last_name, role_id FROM user_table WHERE user_id = $user_id");
+if ($userCheck && $userCheck->num_rows > 0) {
+    $userRow = $userCheck->fetch_assoc();
+    error_log("User found: {$userRow['first_name']} {$userRow['last_name']}, role_id: {$userRow['role_id']}");
+} else {
+    error_log("USER NOT FOUND in user_table!");
+}
+
+// Check all notifications in database
+$allNotif = $conn->query("SELECT * FROM notifications ORDER BY created_at DESC LIMIT 10");
+if ($allNotif && $allNotif->num_rows > 0) {
+    error_log("=== ALL NOTIFICATIONS IN DATABASE (last 10) ===");
+    while ($row = $allNotif->fetch_assoc()) {
+        error_log("ID: {$row['notification_id']}, User: {$row['user_id']}, Status: {$row['status']}, Type: {$row['type']}, Message: " . substr($row['message'], 0, 50));
+    }
+} else {
+    error_log("NO NOTIFICATIONS FOUND IN DATABASE!");
+}
+
+// Check unread notifications for this coordinator
+$unreadQuery = "SELECT COUNT(*) as cnt FROM notifications WHERE user_id = $user_id AND status = 0";
+$unreadResult = $conn->query($unreadQuery);
+$unreadCount = 0;
+if ($unreadResult) {
+    $unreadRow = $unreadResult->fetch_assoc();
+    $unreadCount = $unreadRow['cnt'];
+    error_log("Unread notifications for user_id $user_id: " . $unreadCount);
+} else {
+    error_log("Error checking unread: " . $conn->error);
+}
+error_log("=== COORDINATOR DEBUG END ===");
+// ========== END DEBUGGING ==========
+
 // GET USER DATA FROM DATABASE
 $user_query = "SELECT user_id, username, email, first_name, last_name, role_id, status FROM user_table WHERE user_id = ?";
 $user_stmt = $conn->prepare($user_query);
@@ -48,8 +86,15 @@ $department_name = "Research Department";
 $position = "Research Coordinator";
 $assigned_date = date('F Y');
 
+// ==================== CHECK IF THESIS_TABLE EXISTS ====================
+$thesis_table_exists = false;
+$check_thesis = $conn->query("SHOW TABLES LIKE 'thesis_table'");
+if ($check_thesis && $check_thesis->num_rows > 0) {
+    $thesis_table_exists = true;
+}
+
 // ==================== NOTIFICATION SYSTEM ====================
-// Create notifications table if not exists
+// Create notifications table with correct structure (status instead of is_read)
 $conn->query("CREATE TABLE IF NOT EXISTS notifications (
     notification_id INT AUTO_INCREMENT PRIMARY KEY,
     user_id INT NOT NULL,
@@ -57,27 +102,18 @@ $conn->query("CREATE TABLE IF NOT EXISTS notifications (
     message TEXT NOT NULL,
     type VARCHAR(50) DEFAULT 'info',
     link VARCHAR(255) NULL,
-    is_read TINYINT DEFAULT 0,
+    status TINYINT DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     INDEX (user_id),
-    INDEX (is_read)
+    INDEX (status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 
-// GET NOTIFICATION COUNT - Unread notifications only
-$notificationCount = 0;
-$notif_query = "SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0";
-$notif_stmt = $conn->prepare($notif_query);
-$notif_stmt->bind_param("i", $user_id);
-$notif_stmt->execute();
-$notif_result = $notif_stmt->get_result();
-if ($notif_row = $notif_result->fetch_assoc()) {
-    $notificationCount = $notif_row['count'];
-}
-$notif_stmt->close();
+// GET NOTIFICATION COUNT - using 'status' instead of 'is_read'
+$notificationCount = $unreadCount; // Use the debug count
 
-// GET RECENT NOTIFICATIONS - ALL notifications for dropdown
+// GET RECENT NOTIFICATIONS - using 'status' instead of 'is_read'
 $recentNotifications = [];
-$notif_list_query = "SELECT notification_id as id, user_id, thesis_id, message, type, is_read, created_at FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 10";
+$notif_list_query = "SELECT notification_id, user_id, thesis_id, message, type, link, status, created_at FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 10";
 $notif_list_stmt = $conn->prepare($notif_list_query);
 $notif_list_stmt->bind_param("i", $user_id);
 $notif_list_stmt->execute();
@@ -95,35 +131,37 @@ function notifyDean($conn, $thesis_id, $thesis_title, $student_name, $coordinato
     if ($dean_result && $dean_result->num_rows > 0) {
         while ($dean = $dean_result->fetch_assoc()) {
             $message = "📋 Thesis ready for Dean approval: \"" . $thesis_title . "\" from student " . $student_name . ". Forwarded by Coordinator: " . $coordinator_name;
-            $insert = "INSERT INTO notifications (user_id, thesis_id, message, type, is_read, created_at) VALUES (?, ?, ?, 'dean_forward', 0, NOW())";
+            $link = "../dean/reviewThesis.php?id=" . $thesis_id;
+            $insert = "INSERT INTO notifications (user_id, thesis_id, message, type, link, status, created_at) VALUES (?, ?, ?, 'dean_forward', ?, 0, NOW())";
             $stmt = $conn->prepare($insert);
-            $stmt->bind_param("iis", $dean['user_id'], $thesis_id, $message);
+            $stmt->bind_param("iisss", $dean['user_id'], $thesis_id, $message, $link);
             $stmt->execute();
             $stmt->close();
         }
     }
     return true;
 }
-// ==================== END NOTIFICATION FUNCTIONS ====================
 
-// GET PENDING THESES FROM THESES TABLE (status = 'pending_coordinator')
+// GET PENDING THESES FROM THESIS_TABLE (status = 'pending_coordinator')
 $pending_theses = [];
-$pending_query = "SELECT t.*, u.first_name, u.last_name, u.email 
-                  FROM theses t
-                  JOIN user_table u ON t.submitted_by = u.user_id
-                  WHERE t.status = 'pending_coordinator'
-                  ORDER BY t.created_at DESC";
-$pending_result = $conn->query($pending_query);
-if ($pending_result && $pending_result->num_rows > 0) {
-    while ($row = $pending_result->fetch_assoc()) {
-        $pending_theses[] = $row;
+if ($thesis_table_exists) {
+    $pending_query = "SELECT t.*, u.first_name, u.last_name, u.email 
+                      FROM thesis_table t
+                      JOIN user_table u ON t.student_id = u.user_id
+                      WHERE t.status = 'pending_coordinator'
+                      ORDER BY t.date_submitted DESC";
+    $pending_result = $conn->query($pending_query);
+    if ($pending_result && $pending_result->num_rows > 0) {
+        while ($row = $pending_result->fetch_assoc()) {
+            $pending_theses[] = $row;
+        }
     }
 }
 
-// MARK NOTIFICATION AS READ (via AJAX)
+// MARK NOTIFICATION AS READ - using 'status' instead of 'is_read'
 if (isset($_POST['mark_read']) && isset($_POST['notif_id'])) {
     $notif_id = intval($_POST['notif_id']);
-    $update_query = "UPDATE notifications SET is_read = 1 WHERE notification_id = ? AND user_id = ?";
+    $update_query = "UPDATE notifications SET status = 1 WHERE notification_id = ? AND user_id = ?";
     $update_stmt = $conn->prepare($update_query);
     $update_stmt->bind_param("ii", $notif_id, $user_id);
     $update_stmt->execute();
@@ -132,9 +170,9 @@ if (isset($_POST['mark_read']) && isset($_POST['notif_id'])) {
     exit;
 }
 
-// MARK ALL NOTIFICATIONS AS READ
+// MARK ALL NOTIFICATIONS AS READ - using 'status' instead of 'is_read'
 if (isset($_POST['mark_all_read'])) {
-    $update_query = "UPDATE notifications SET is_read = 1 WHERE user_id = ?";
+    $update_query = "UPDATE notifications SET status = 1 WHERE user_id = ?";
     $update_stmt = $conn->prepare($update_query);
     $update_stmt->bind_param("i", $user_id);
     $update_stmt->execute();
@@ -143,14 +181,14 @@ if (isset($_POST['mark_all_read'])) {
     exit;
 }
 
-// FORWARD THESIS TO DEAN (via AJAX)
-if (isset($_POST['forward_to_dean']) && isset($_POST['thesis_id'])) {
+// FORWARD THESIS TO DEAN
+if (isset($_POST['forward_to_dean']) && isset($_POST['thesis_id']) && $thesis_table_exists) {
     $thesis_id = intval($_POST['thesis_id']);
     $thesis_title = $_POST['thesis_title'] ?? '';
     $student_name = $_POST['student_name'] ?? '';
     $coordinator_name = $fullName;
     
-    $update_thesis = "UPDATE theses SET status = 'forwarded_to_dean' WHERE thesis_id = ?";
+    $update_thesis = "UPDATE thesis_table SET status = 'forwarded_to_dean' WHERE thesis_id = ?";
     $update_stmt = $conn->prepare($update_thesis);
     $update_stmt->bind_param("i", $thesis_id);
     $update_stmt->execute();
@@ -162,27 +200,19 @@ if (isset($_POST['forward_to_dean']) && isset($_POST['thesis_id'])) {
     exit;
 }
 
-// REJECT THESIS (via AJAX)
-if (isset($_POST['reject_thesis']) && isset($_POST['thesis_id'])) {
+// REJECT THESIS
+if (isset($_POST['reject_thesis']) && isset($_POST['thesis_id']) && $thesis_table_exists) {
     $thesis_id = intval($_POST['thesis_id']);
     $reason = isset($_POST['reason']) ? $_POST['reason'] : 'No reason provided';
     
-    $update_thesis = "UPDATE theses SET status = 'rejected', feedback = ? WHERE thesis_id = ?";
+    $update_thesis = "UPDATE thesis_table SET status = 'rejected' WHERE thesis_id = ?";
     $update_stmt = $conn->prepare($update_thesis);
-    $update_stmt->bind_param("si", $reason, $thesis_id);
+    $update_stmt->bind_param("i", $thesis_id);
     $update_stmt->execute();
     $update_stmt->close();
     
     echo json_encode(['success' => true, 'message' => 'Thesis rejected successfully']);
     exit;
-}
-// ============================================================
-
-// CHECK THESES TABLE
-$theses_table_exists = false;
-$check_theses = $conn->query("SHOW TABLES LIKE 'theses'");
-if ($check_theses && $check_theses->num_rows > 0) {
-    $theses_table_exists = true;
 }
 
 // GET THESIS DATA FOR STATS AND DISPLAY
@@ -192,44 +222,44 @@ $allSubmissions = [
     'rejected' => []
 ];
 
-if ($theses_table_exists) {
-    $pending_query = "SELECT thesis_id, title, author, department, year, status, created_at 
-                      FROM theses 
+if ($thesis_table_exists) {
+    $pending_query = "SELECT thesis_id, title, adviser, department, year, status, date_submitted 
+                      FROM thesis_table 
                       WHERE status = 'pending_coordinator'
-                      ORDER BY created_at DESC";
+                      ORDER BY date_submitted DESC";
     $pending_result = $conn->query($pending_query);
     if ($pending_result && $pending_result->num_rows > 0) {
         while ($row = $pending_result->fetch_assoc()) {
             $allSubmissions['pending_coordinator'][] = [
                 'title' => $row['title'],
-                'author' => $row['author'] ?? 'Unknown',
-                'date' => isset($row['created_at']) ? date('M d, Y', strtotime($row['created_at'])) : date('M d, Y'),
+                'author' => $row['adviser'] ?? 'Unknown',
+                'date' => isset($row['date_submitted']) ? date('M d, Y', strtotime($row['date_submitted'])) : date('M d, Y'),
                 'id' => $row['thesis_id']
             ];
         }
     }
     
-    $forwarded_query = "SELECT thesis_id, title, author, department, year, status, created_at FROM theses WHERE status = 'forwarded_to_dean' ORDER BY created_at DESC";
+    $forwarded_query = "SELECT thesis_id, title, adviser, department, year, status, date_submitted FROM thesis_table WHERE status = 'forwarded_to_dean' ORDER BY date_submitted DESC";
     $forwarded_result = $conn->query($forwarded_query);
     if ($forwarded_result && $forwarded_result->num_rows > 0) {
         while ($row = $forwarded_result->fetch_assoc()) {
             $allSubmissions['forwarded_to_dean'][] = [
                 'title' => $row['title'],
-                'author' => $row['author'] ?? 'Unknown',
-                'date' => isset($row['created_at']) ? date('M d, Y', strtotime($row['created_at'])) : date('M d, Y'),
+                'author' => $row['adviser'] ?? 'Unknown',
+                'date' => isset($row['date_submitted']) ? date('M d, Y', strtotime($row['date_submitted'])) : date('M d, Y'),
                 'id' => $row['thesis_id']
             ];
         }
     }
     
-    $rejected_query = "SELECT thesis_id, title, author, department, year, status, created_at FROM theses WHERE status = 'rejected' ORDER BY created_at DESC";
+    $rejected_query = "SELECT thesis_id, title, adviser, department, year, status, date_submitted FROM thesis_table WHERE status = 'rejected' ORDER BY date_submitted DESC";
     $rejected_result = $conn->query($rejected_query);
     if ($rejected_result && $rejected_result->num_rows > 0) {
         while ($row = $rejected_result->fetch_assoc()) {
             $allSubmissions['rejected'][] = [
                 'title' => $row['title'],
-                'author' => $row['author'] ?? 'Unknown',
-                'date' => isset($row['created_at']) ? date('M d, Y', strtotime($row['created_at'])) : date('M d, Y'),
+                'author' => $row['adviser'] ?? 'Unknown',
+                'date' => isset($row['date_submitted']) ? date('M d, Y', strtotime($row['date_submitted'])) : date('M d, Y'),
                 'id' => $row['thesis_id']
             ];
         }
@@ -256,8 +286,8 @@ foreach ($allSubmissions as $status => $theses) {
 $monthly_data = array_fill(0, 12, 0);
 $months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-if ($theses_table_exists) {
-    $monthly_query = "SELECT MONTH(created_at) as month, COUNT(*) as count FROM theses WHERE YEAR(created_at) = YEAR(CURDATE()) GROUP BY MONTH(created_at)";
+if ($thesis_table_exists) {
+    $monthly_query = "SELECT MONTH(date_submitted) as month, COUNT(*) as count FROM thesis_table WHERE YEAR(date_submitted) = YEAR(CURDATE()) GROUP BY MONTH(date_submitted)";
     $monthly_result = $conn->query($monthly_query);
     if ($monthly_result && $monthly_result->num_rows > 0) {
         while ($row = $monthly_result->fetch_assoc()) {
@@ -266,7 +296,6 @@ if ($theses_table_exists) {
     }
 }
 
-// Check if may data para sa graph
 $hasMonthlyData = false;
 foreach ($monthly_data as $val) {
     if ($val > 0) {
@@ -275,7 +304,6 @@ foreach ($monthly_data as $val) {
     }
 }
 
-// Sample data para sa graph kung walay actual data
 $sample_monthly_data = [3, 4, 5, 6, 8, 10, 12, 9, 7, 5, 4, 2];
 $sample_stats = [
     'forwarded' => 5,
@@ -356,7 +384,22 @@ $currentPage = basename($_SERVER['PHP_SELF']);
         .notification-icon { position: relative; cursor: pointer; width: 40px; height: 40px; background: #fef2f2; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
         .notification-icon:hover { background: #fee2e2; }
         .notification-icon i { font-size: 1.2rem; color: #dc2626; }
-        .notification-badge { position: absolute; top: -5px; right: -5px; background: #ef4444; color: white; font-size: 0.6rem; font-weight: 600; min-width: 18px; height: 18px; border-radius: 10px; display: flex; align-items: center; justify-content: center; padding: 0 5px; }
+        .notification-badge { 
+            position: absolute; 
+            top: -5px; 
+            right: -5px; 
+            background: #ef4444; 
+            color: white; 
+            font-size: 0.6rem; 
+            font-weight: 600; 
+            min-width: 18px; 
+            height: 18px; 
+            border-radius: 10px; 
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+            padding: 0 5px; 
+        }
         
         .notification-dropdown { 
             position: absolute; 
@@ -644,9 +687,42 @@ $currentPage = basename($_SERVER['PHP_SELF']);
             align-items: center;
         }
         
+        .btn-forward {
+            background: #10b981;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+        .btn-forward:hover {
+            background: #059669;
+        }
+        .btn-reject {
+            background: #ef4444;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+        .btn-reject:hover {
+            background: #dc2626;
+        }
+        .reject-input {
+            padding: 8px;
+            border: 1px solid #fee2e2;
+            border-radius: 8px;
+            width: 100%;
+            font-size: 0.8rem;
+        }
+        
         @keyframes fadeSlideDown { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
         
-        /* Toast Message */
         .toast-message {
             position: fixed;
             bottom: 30px;
@@ -738,9 +814,8 @@ $currentPage = basename($_SERVER['PHP_SELF']);
             color: #fecaca;
         }
         body.dark-mode .btn-reject {
-            background: #3d3d3d;
-            color: #fecaca;
-            border-color: #991b1b;
+            background: #dc2626;
+            color: white;
         }
     </style>
 </head>
@@ -757,9 +832,10 @@ $currentPage = basename($_SERVER['PHP_SELF']);
             <div class="notification-container">
                 <div class="notification-icon" id="notificationIcon">
                     <i class="far fa-bell"></i>
-                    <?php if ($notificationCount > 0): ?>
-                        <span class="notification-badge" id="notificationBadge"><?= $notificationCount ?></span>
-                    <?php endif; ?>
+                    <!-- FIXED: Always show badge with count, hide with CSS if 0 -->
+                    <span class="notification-badge" id="notificationBadge" style="display: <?= $notificationCount > 0 ? 'flex' : 'none' ?>;">
+                        <?= $notificationCount ?>
+                    </span>
                 </div>
                 <div class="notification-dropdown" id="notificationDropdown">
                     <div class="notification-header">
@@ -778,7 +854,7 @@ $currentPage = basename($_SERVER['PHP_SELF']);
                             </div>
                         <?php else: ?>
                             <?php foreach ($recentNotifications as $notif): ?>
-                                <a href="reviewThesis.php?id=<?= $notif['thesis_id'] ?>" class="notification-item <?= $notif['is_read'] == 0 ? 'unread' : '' ?>" data-id="<?= $notif['id'] ?>">
+                                <a href="reviewThesis.php?id=<?= $notif['thesis_id'] ?>" class="notification-item <?= $notif['status'] == 0 ? 'unread' : '' ?>" data-id="<?= $notif['notification_id'] ?>">
                                     <div class="notif-icon">
                                         <?php 
                                         if(strpos($notif['message'], 'submitted') !== false || strpos($notif['message'], 'forwarded') !== false) 
@@ -852,7 +928,7 @@ $currentPage = basename($_SERVER['PHP_SELF']);
             <div class="coordinator-info"><div class="coordinator-name"><?= htmlspecialchars($fullName) ?></div><div class="coordinator-position"><?= htmlspecialchars($position) ?></div><div class="coordinator-since">Since <?= $assigned_date ?></div></div>
         </div>
 
-        <!-- ==================== PENDING THESES FROM FACULTY SECTION ==================== -->
+        <!-- PENDING THESES FROM FACULTY SECTION -->
         <?php if (!empty($pending_theses)): ?>
         <div class="notification-card">
             <h3><i class="fas fa-bell"></i> Pending Theses for Dean Forwarding (<?= count($pending_theses) ?>)</h3>
@@ -865,7 +941,7 @@ $currentPage = basename($_SERVER['PHP_SELF']);
                             Student: <?= htmlspecialchars($thesis['first_name'] . ' ' . $thesis['last_name']) ?>
                         </div>
                         <div class="notification-time">
-                            <i class="far fa-clock"></i> Submitted: <?= date('M d, Y', strtotime($thesis['created_at'])) ?>
+                            <i class="far fa-clock"></i> Submitted: <?= date('M d, Y', strtotime($thesis['date_submitted'])) ?>
                         </div>
                     </div>
                     <div class="notification-actions-group">
@@ -950,7 +1026,6 @@ $currentPage = basename($_SERVER['PHP_SELF']);
             months: <?= json_encode($months) ?> 
         };
         
-        // DOM Elements
         const hamburgerBtn = document.getElementById('hamburgerBtn');
         const sidebar = document.getElementById('sidebar');
         const sidebarOverlay = document.getElementById('sidebarOverlay');
@@ -964,7 +1039,6 @@ $currentPage = basename($_SERVER['PHP_SELF']);
         const thesisTableBody = document.getElementById('thesisTableBody');
         const markAllReadBtn = document.getElementById('markAllRead');
         
-        // Toast function
         function showToast(message, isError = false) {
             const toast = document.createElement('div');
             toast.className = 'toast-message' + (isError ? ' error' : '');
@@ -973,7 +1047,6 @@ $currentPage = basename($_SERVER['PHP_SELF']);
             setTimeout(() => toast.remove(), 3000);
         }
         
-        // Forward to Dean Function
         window.forwardToDean = function(button) {
             const container = button.closest('.notification-list-item');
             const thesisId = container.dataset.thesisId;
@@ -1020,7 +1093,6 @@ $currentPage = basename($_SERVER['PHP_SELF']);
             }
         };
         
-        // Show reject reason input
         window.showRejectReason = function(button) {
             const container = button.closest('.notification-list-item');
             const actionsGroup = container.querySelector('.notification-actions-group');
@@ -1030,7 +1102,6 @@ $currentPage = basename($_SERVER['PHP_SELF']);
             rejectReasonDiv.style.display = 'block';
         };
         
-        // Cancel reject
         window.cancelReject = function(button) {
             const container = button.closest('.notification-list-item');
             const actionsGroup = container.querySelector('.notification-actions-group');
@@ -1042,7 +1113,6 @@ $currentPage = basename($_SERVER['PHP_SELF']);
             if (reasonInput) reasonInput.value = '';
         };
         
-        // Confirm reject
         window.confirmReject = function(button) {
             const container = button.closest('.notification-list-item');
             const thesisId = container.dataset.thesisId;
@@ -1092,7 +1162,6 @@ $currentPage = basename($_SERVER['PHP_SELF']);
             });
         };
         
-        // Sidebar Functions
         function openSidebar() {
             sidebar.classList.add('open');
             sidebarOverlay.classList.add('show');
@@ -1129,7 +1198,6 @@ $currentPage = basename($_SERVER['PHP_SELF']);
             if (window.innerWidth > 768 && sidebar.classList.contains('open')) closeSidebar();
         });
         
-        // Profile Dropdown
         function toggleProfileDropdown(e) {
             e.stopPropagation();
             profileDropdown.classList.toggle('show');
@@ -1145,7 +1213,6 @@ $currentPage = basename($_SERVER['PHP_SELF']);
             document.addEventListener('click', closeProfileDropdown);
         }
         
-        // ==================== NOTIFICATION DROPDOWN TOGGLE ====================
         function toggleNotificationDropdown(e) {
             e.stopPropagation();
             if (notificationDropdown) {
@@ -1168,7 +1235,6 @@ $currentPage = basename($_SERVER['PHP_SELF']);
         }
         document.addEventListener('click', closeNotificationDropdown);
         
-        // Mark notification as read
         function markNotificationAsRead(notifId, element) {
             fetch(window.location.href, {
                 method: 'POST',
@@ -1193,7 +1259,6 @@ $currentPage = basename($_SERVER['PHP_SELF']);
             .catch(error => console.error('Error:', error));
         }
         
-        // Mark all as read
         function markAllAsRead() {
             fetch(window.location.href, {
                 method: 'POST',
@@ -1213,17 +1278,12 @@ $currentPage = basename($_SERVER['PHP_SELF']);
             .catch(error => console.error('Error:', error));
         }
         
-        // Initialize notification click handlers
         function initNotifications() {
-            // Notification items are now <a> tags with href, so they will navigate directly
-            // No need for additional click handlers, but we keep for backward compatibility
             document.querySelectorAll('.notification-item').forEach(item => {
                 if (!item.classList.contains('empty')) {
-                    // Add click handler to mark as read before navigation
                     item.addEventListener('click', function(e) {
                         const id = this.dataset.id;
                         if (id) {
-                            // Don't prevent default, let the link work
                             markNotificationAsRead(id, this);
                         }
                     });
@@ -1238,7 +1298,6 @@ $currentPage = basename($_SERVER['PHP_SELF']);
             }
         }
         
-        // Dark Mode
         function initDarkMode() {
             const isDark = localStorage.getItem('darkMode') === 'true';
             if (isDark) {
@@ -1258,7 +1317,6 @@ $currentPage = basename($_SERVER['PHP_SELF']);
             }
         }
         
-        // Charts Function
         function initCharts() {
             const statusCtx = document.getElementById('statusChart');
             if (statusCtx && window.chartData) {
@@ -1376,7 +1434,6 @@ $currentPage = basename($_SERVER['PHP_SELF']);
             }
         }
         
-        // Search Functions
         function initSearch() {
             if (searchInput) {
                 searchInput.addEventListener('input', function() {
@@ -1399,13 +1456,12 @@ $currentPage = basename($_SERVER['PHP_SELF']);
             }
         }
         
-        // Initialize Everything
         document.addEventListener('DOMContentLoaded', function() {
             initDarkMode();
             initCharts();
             initSearch();
             initNotifications();
-            console.log('Coordinator Dashboard Initialized - Notifications are clickable');
+            console.log('Coordinator Dashboard Initialized - Using thesis_table');
         });
     </script>
 </body>

@@ -12,7 +12,6 @@ if (!isset($_SESSION["user_id"])) {
 
 $user_id = (int)$_SESSION["user_id"];
 
-
 $roleQuery = "SELECT role_id FROM user_table WHERE user_id = ? LIMIT 1";
 $stmt = $conn->prepare($roleQuery);
 $stmt->bind_param("i", $user_id);
@@ -36,11 +35,12 @@ $last  = trim($faculty["last_name"] ?? "");
 $fullName = trim($first . " " . $last);
 $initials = $first && $last ? strtoupper(substr($first, 0, 1) . substr($last, 0, 1)) : "FA";
 
+// GI-USAB: notification_table -> notifications, status -> is_read
 $notifications = [];
 try {
     $query = "SELECT n.*, t.title as thesis_title, t.thesis_id,
                      u.first_name as student_first, u.last_name as student_last
-              FROM notification_table n
+              FROM notifications n
               LEFT JOIN thesis_table t ON n.thesis_id = t.thesis_id
               LEFT JOIN user_table u ON t.student_id = u.user_id
               WHERE n.user_id = ? 
@@ -58,9 +58,10 @@ try {
     error_log("Notification error: " . $e->getMessage());
 }
 
+// GI-USAB: status -> is_read
 $unreadCount = 0;
 try {
-    $countQuery = "SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND status = 'unread'";
+    $countQuery = "SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0";
     $stmt = $conn->prepare($countQuery);
     $stmt->bind_param("i", $user_id);
     $stmt->execute();
@@ -103,7 +104,6 @@ $pageTitle = "Notifications";
             display: flex;
         }
 
-        /* Sidebar */
         .sidebar {
             width: 280px;
             background: linear-gradient(180deg, #FE4853 0%, #732529 100%);
@@ -239,7 +239,6 @@ $pageTitle = "Notifications";
             border: 2px solid white;
         }
 
-        /* Notification Page Styles */
         .notification-container {
             max-width: 900px;
             margin: 0 auto;
@@ -556,11 +555,11 @@ $pageTitle = "Notifications";
                     </div>
                 <?php else: ?>
                     <?php foreach ($notifications as $notif): ?>
-                        <div class="notification-item <?= $notif['status'] == 'unread' ? 'unread' : '' ?>" 
+                        <div class="notification-item <?= $notif['is_read'] == 0 ? 'unread' : '' ?>" 
                              data-notification-id="<?= $notif['notification_id'] ?>"
                              data-thesis-id="<?= $notif['thesis_id'] ?? 0 ?>">
                             <div class="notification-icon">
-                                <i class="fas fa-<?= $notif['status'] == 'unread' ? 'bell' : 'bell-slash' ?>"></i>
+                                <i class="fas fa-<?= $notif['is_read'] == 0 ? 'bell' : 'bell-slash' ?>"></i>
                             </div>
                             <div class="notification-content">
                                 <div class="notification-message">
@@ -577,7 +576,7 @@ $pageTitle = "Notifications";
                                 </div>
                             </div>
                             <div class="notification-actions">
-                                <?php if ($notif['status'] == 'unread'): ?>
+                                <?php if ($notif['is_read'] == 0): ?>
                                     <button class="btn-mark mark-read-btn" data-id="<?= $notif['notification_id'] ?>">
                                         <i class="fas fa-check"></i> Mark Read
                                     </button>
@@ -609,8 +608,6 @@ $pageTitle = "Notifications";
             }
         }
 
-        // =============== NOTIFICATION FUNCTIONS ===============
-        
         // Mark single notification as read
         document.querySelectorAll('.mark-read-btn').forEach(btn => {
             btn.addEventListener('click', function(e) {
@@ -618,13 +615,9 @@ $pageTitle = "Notifications";
                 const notificationId = this.getAttribute('data-id');
                 const notificationItem = this.closest('.notification-item');
                 
-                console.log('Mark read clicked - ID:', notificationId);
-                
-                // Show loading state
                 this.disabled = true;
                 this.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Processing...';
                 
-                // AJAX request
                 fetch('notification_handler.php', {
                     method: 'POST',
                     headers: {
@@ -637,13 +630,9 @@ $pageTitle = "Notifications";
                 })
                 .then(response => response.json())
                 .then(data => {
-                    console.log('Response:', data);
-                    
                     if (data.success) {
-                        // Remove unread class
                         notificationItem.classList.remove('unread');
                         
-                        // Update badge in sidebar
                         const sidebarBadge = document.querySelector('.sidebar-nav .badge');
                         if (sidebarBadge) {
                             let currentCount = parseInt(sidebarBadge.textContent);
@@ -654,10 +643,8 @@ $pageTitle = "Notifications";
                             }
                         }
                         
-                        // Remove this button
                         this.remove();
                         
-                        // Check if there are any unread left
                         const unreadItems = document.querySelectorAll('.notification-item.unread');
                         if (unreadItems.length === 0) {
                             const markAllBtn = document.getElementById('markAllReadBtn');
@@ -682,9 +669,6 @@ $pageTitle = "Notifications";
         const markAllBtn = document.getElementById('markAllReadBtn');
         if (markAllBtn) {
             markAllBtn.addEventListener('click', function() {
-                console.log('Mark all as read clicked');
-                
-                // Show loading state
                 this.disabled = true;
                 this.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Processing...';
                 
@@ -697,22 +681,13 @@ $pageTitle = "Notifications";
                 })
                 .then(response => response.json())
                 .then(data => {
-                    console.log('Mark all response:', data);
-                    
                     if (data.success) {
-                        // Remove unread class from all
                         document.querySelectorAll('.notification-item').forEach(item => {
                             item.classList.remove('unread');
                         });
-                        
-                        // Remove all mark read buttons
                         document.querySelectorAll('.mark-read-btn').forEach(btn => btn.remove());
-                        
-                        // Remove sidebar badge
                         const sidebarBadge = document.querySelector('.sidebar-nav .badge');
                         if (sidebarBadge) sidebarBadge.remove();
-                        
-                        // Remove this button
                         this.remove();
                     } else {
                         alert('Error: ' + (data.error || 'Unknown error'));
@@ -729,22 +704,19 @@ $pageTitle = "Notifications";
             });
         }
 
-        // Optional: Click on notification item to mark as read and view
+        // Click on notification item to mark as read and view
         document.querySelectorAll('.notification-item').forEach(item => {
             item.addEventListener('click', function(e) {
-                // Don't trigger if clicking on buttons
                 if (e.target.closest('button') || e.target.closest('a')) return;
                 
                 const notificationId = this.getAttribute('data-notification-id');
                 const thesisId = this.getAttribute('data-thesis-id');
                 const markReadBtn = this.querySelector('.mark-read-btn');
                 
-                // If there's a mark read button and it's unread, click it
                 if (markReadBtn && this.classList.contains('unread')) {
                     markReadBtn.click();
                 }
                 
-                // Redirect to review page after a short delay
                 if (thesisId && thesisId > 0 && thesisId != '0') {
                     setTimeout(() => {
                         window.location.href = 'reviewThesis.php?id=' + thesisId;
