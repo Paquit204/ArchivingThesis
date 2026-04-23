@@ -3,6 +3,10 @@ session_start();
 include("../config/db.php");
 include("../config/archive_manager.php");
 
+// Initialize email sender
+require_once __DIR__ . '/../config/smtp_config.php';
+$emailSender = new EmailSender(); // Create instance
+
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
 
@@ -33,19 +37,22 @@ $last  = trim($user["last_name"] ?? "");
 $displayName = trim($first . " " . $last);
 $initials = $first && $last ? strtoupper(substr($first, 0, 1) . substr($last, 0, 1)) : "U";
 
-// Create thesis_invitations table if not exists
-$conn->query("CREATE TABLE IF NOT EXISTS thesis_invitations (
-    invitation_id INT AUTO_INCREMENT PRIMARY KEY,
-    thesis_id INT NOT NULL,
-    invited_user_id INT NOT NULL,
-    invited_by INT NOT NULL,
-    invitation_status ENUM('pending', 'accepted', 'declined') DEFAULT 'pending',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    INDEX (thesis_id),
-    INDEX (invited_user_id),
-    INDEX (invitation_status)
-)");
+// Check if thesis_invitations table exists, if not create it (using is_read column)
+$tableCheck = $conn->query("SHOW TABLES LIKE 'thesis_invitations'");
+if ($tableCheck->num_rows == 0) {
+    $conn->query("CREATE TABLE thesis_invitations (
+        invitation_id INT AUTO_INCREMENT PRIMARY KEY,
+        thesis_id INT NOT NULL,
+        invited_user_id INT NOT NULL,
+        invited_by INT NOT NULL,
+        is_read ENUM('pending', 'accepted', 'declined') DEFAULT 'pending',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX (thesis_id),
+        INDEX (invited_user_id),
+        INDEX (is_read)
+    )");
+}
 
 // Create thesis_collaborators table if not exists
 $conn->query("CREATE TABLE IF NOT EXISTS thesis_collaborators (
@@ -59,7 +66,7 @@ $conn->query("CREATE TABLE IF NOT EXISTS thesis_collaborators (
     UNIQUE KEY unique_collaborator (thesis_id, user_id)
 )");
 
-// Get notification count - using is_read
+// Get notification count
 $notificationCount = 0;
 $notif_query = "SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0";
 $notif_stmt = $conn->prepare($notif_query);
@@ -136,7 +143,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST['submit_thesis'])) {
                 $collabStmt->execute();
                 $collabStmt->close();
                 
-                // ==================== SEND NOTIFICATION TO FACULTY ====================
+                // ==================== SEND DATABASE NOTIFICATIONS ====================
                 $facultyQuery = "SELECT user_id FROM user_table WHERE role_id = 3";
                 $facultyResult = $conn->query($facultyQuery);
                 
@@ -153,6 +160,27 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST['submit_thesis'])) {
                         $notifStmt->bind_param("iiss", $faculty['user_id'], $thesis_id, $message, $link);
                         $notifStmt->execute();
                         $notifStmt->close();
+                    }
+                }
+                
+                // ==================== SEND EMAIL NOTIFICATIONS ====================
+                // Send to all faculty members
+                $facultyEmailQuery = "SELECT email FROM user_table WHERE role_id = 3";
+                $facultyEmailResult = $conn->query($facultyEmailQuery);
+                
+                if ($facultyEmailResult && $facultyEmailResult->num_rows > 0) {
+                    while ($faculty = $facultyEmailResult->fetch_assoc()) {
+                        try {
+                            $emailSender->sendThesisSubmission(
+                                $faculty['email'],
+                                $displayName,
+                                $title,
+                                $thesis_id,
+                                $department
+                            );
+                        } catch (Exception $e) {
+                            error_log("Email failed to {$faculty['email']}: " . $e->getMessage());
+                        }
                     }
                 }
                 
@@ -182,20 +210,32 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST['submit_thesis'])) {
                                 $checkInvite->close();
                                 
                                 if (!$existing) {
-                                    // Send invitation
-                                    $inviteQuery = "INSERT INTO thesis_invitations (thesis_id, invited_user_id, invited_by, invitation_status) VALUES (?, ?, ?, 'pending')";
+                                    // Send invitation to database - USING is_read column
+                                    $inviteQuery = "INSERT INTO thesis_invitations (thesis_id, invited_user_id, invited_by, is_read) VALUES (?, ?, ?, 'pending')";
                                     $inviteStmt = $conn->prepare($inviteQuery);
                                     $inviteStmt->bind_param("iii", $thesis_id, $invited_user['user_id'], $user_id);
                                     $inviteStmt->execute();
                                     $inviteStmt->close();
                                     
-                                    // Send notification to invited user
+                                    // Send database notification
                                     $notifMessage = "📢 " . $displayName . " invited you to collaborate on thesis: \"" . $title . "\"";
                                     $notifQuery = "INSERT INTO notifications (user_id, thesis_id, message, type, is_read, created_at) VALUES (?, ?, ?, 'thesis_invitation', 0, NOW())";
                                     $notifStmt = $conn->prepare($notifQuery);
                                     $notifStmt->bind_param("iis", $invited_user['user_id'], $thesis_id, $notifMessage);
                                     $notifStmt->execute();
                                     $notifStmt->close();
+                                    
+                                    // Send EMAIL invitation
+                                    try {
+                                        $emailSender->sendInvitation(
+                                            $invited_user['email'],
+                                            $displayName,
+                                            $title,
+                                            $thesis_id
+                                        );
+                                    } catch (Exception $e) {
+                                        error_log("Invitation email failed: " . $e->getMessage());
+                                    }
                                     
                                     $invited_count++;
                                     $invited_list[] = $invited_user['email'];

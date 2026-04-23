@@ -18,16 +18,16 @@ $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 $year = isset($_GET['year']) ? trim($_GET['year']) : '';
 $department = isset($_GET['department']) ? trim($_GET['department']) : '';
 
-// Only show archived theses
+// Only show archived theses (use is_archived instead of status)
 $sql = "SELECT t.*, u.first_name, u.last_name 
         FROM thesis_table t
         JOIN user_table u ON t.student_id = u.user_id
-        WHERE t.status = 'archived'";
+        WHERE t.is_archived = 1";
 
 $countSql = "SELECT COUNT(*) as total 
              FROM thesis_table t
              JOIN user_table u ON t.student_id = u.user_id
-             WHERE t.status = 'archived'";
+             WHERE t.is_archived = 1";
 
 $params = [];
 $countParams = [];
@@ -110,9 +110,9 @@ while ($row = $result->fetch_assoc()) {
 }
 $stmt->close();
 
-// Get unique years for filter dropdown
+// Get unique years for filter dropdown (use is_archived = 1)
 $years = [];
-$yearQuery = "SELECT DISTINCT YEAR(date_submitted) as year FROM thesis_table WHERE status = 'archived' ORDER BY year DESC";
+$yearQuery = "SELECT DISTINCT YEAR(date_submitted) as year FROM thesis_table WHERE is_archived = 1 ORDER BY year DESC";
 $yearResult = $conn->query($yearQuery);
 if ($yearResult) {
     while ($row = $yearResult->fetch_assoc()) {
@@ -120,9 +120,9 @@ if ($yearResult) {
     }
 }
 
-// Get unique departments for filter dropdown
+// Get unique departments for filter dropdown (use is_archived = 1)
 $departments = [];
-$deptQuery = "SELECT DISTINCT department FROM thesis_table WHERE department IS NOT NULL AND department != '' AND status = 'archived' ORDER BY department";
+$deptQuery = "SELECT DISTINCT department FROM thesis_table WHERE department IS NOT NULL AND department != '' AND is_archived = 1 ORDER BY department";
 $deptResult = $conn->query($deptQuery);
 if ($deptResult) {
     while ($row = $deptResult->fetch_assoc()) {

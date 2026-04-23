@@ -41,20 +41,20 @@ if (!$thesis) {
     exit;
 }
 
-// Get archive details if exists (check if table exists first)
-$archive = null;
-$check_archive_table = $conn->query("SHOW TABLES LIKE 'archive_table'");
-if ($check_archive_table && $check_archive_table->num_rows > 0) {
-    $archive_query = "SELECT * FROM archive_table WHERE thesis_id = ?";
-    $archive_stmt = $conn->prepare($archive_query);
-    $archive_stmt->bind_param("i", $thesis_id);
-    $archive_stmt->execute();
-    $archive_result = $archive_stmt->get_result();
-    $archive = $archive_result->fetch_assoc();
-    $archive_stmt->close();
-}
+// Determine thesis status based on is_archived
+$thesis_status = ($thesis['is_archived'] == 1) ? 'archived' : 'pending';
 
-// GET NOTIFICATION COUNT - FIXED: 'status' to 'is_read'
+// Get archive details if exists
+$archive = null;
+$archive_query = "SELECT * FROM archive_table WHERE thesis_id = ?";
+$archive_stmt = $conn->prepare($archive_query);
+$archive_stmt->bind_param("i", $thesis_id);
+$archive_stmt->execute();
+$archive_result = $archive_stmt->get_result();
+$archive = $archive_result->fetch_assoc();
+$archive_stmt->close();
+
+// GET NOTIFICATION COUNT
 $notificationCount = 0;
 $notif_check = $conn->query("SHOW TABLES LIKE 'notifications'");
 if ($notif_check && $notif_check->num_rows) {
@@ -68,7 +68,7 @@ if ($notif_check && $notif_check->num_rows) {
     $n->close();
 }
 
-// GET RECENT NOTIFICATIONS - FIXED: 'status' to 'is_read'
+// GET RECENT NOTIFICATIONS
 $recentNotifications = [];
 $notif_list = $conn->prepare("SELECT notification_id, user_id, thesis_id, message, is_read, created_at, link FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 5");
 $notif_list->bind_param("i", $user_id);
@@ -87,7 +87,7 @@ while ($row = $notif_result->fetch_assoc()) {
 }
 $notif_list->close();
 
-// MARK NOTIFICATION AS READ - FIXED: 'status' to 'is_read'
+// MARK NOTIFICATION AS READ
 if (isset($_POST['mark_read']) && isset($_POST['notif_id'])) {
     $notif_id = intval($_POST['notif_id']);
     $update = $conn->prepare("UPDATE notifications SET is_read = 1 WHERE notification_id = ? AND user_id = ?");
@@ -98,7 +98,7 @@ if (isset($_POST['mark_read']) && isset($_POST['notif_id'])) {
     exit;
 }
 
-// MARK ALL AS READ - FIXED: 'status' to 'is_read'
+// MARK ALL AS READ
 if (isset($_POST['mark_all_read'])) {
     $update = $conn->prepare("UPDATE notifications SET is_read = 1 WHERE user_id = ?");
     $update->bind_param("i", $user_id);
@@ -338,7 +338,7 @@ $pageTitle = "View Thesis Details";
             <div class="thesis-header">
                 <h1 class="thesis-title">
                     <?= htmlspecialchars($thesis['title']) ?>
-                    <span class="status-badge status-<?= $thesis['status'] ?>"><?= ucfirst($thesis['status']) ?></span>
+                    <span class="status-badge status-<?= $thesis_status ?>"><?= ucfirst($thesis_status) ?></span>
                 </h1>
             </div>
 
@@ -407,7 +407,7 @@ $pageTitle = "View Thesis Details";
             <?php endif; ?>
 
             <!-- Archive Information -->
-            <?php if ($thesis['status'] == 'archived' && $archive): ?>
+            <?php if ($thesis_status == 'archived'): ?>
             <div class="archive-info">
                 <h4><i class="fas fa-archive"></i> Archive Information</h4>
                 <div class="archive-details">
@@ -420,8 +420,8 @@ $pageTitle = "View Thesis Details";
                         <div class="info-value"><?= $archive['retention_period'] ?? '5' ?> years</div>
                     </div>
                     <div>
-                        <div class="info-label">Access Level</div>
-                        <div class="info-value"><?= ucfirst($archive['access_level'] ?? 'Public') ?></div>
+                        <div class="info-label">Status</div>
+                        <div class="info-value">Archived</div>
                     </div>
                 </div>
                 <?php if (!empty($archive['archive_notes'])): ?>
@@ -430,14 +430,6 @@ $pageTitle = "View Thesis Details";
                     <div class="info-value"><?= htmlspecialchars($archive['archive_notes']) ?></div>
                 </div>
                 <?php endif; ?>
-            </div>
-            <?php elseif ($thesis['status'] == 'archived' && !$archive): ?>
-            <div class="archive-info">
-                <h4><i class="fas fa-archive"></i> Archive Information</h4>
-                <div>
-                    <div class="info-label">Archived Date</div>
-                    <div class="info-value"><?= isset($thesis['archived_date']) ? date('F d, Y', strtotime($thesis['archived_date'])) : 'N/A' ?></div>
-                </div>
             </div>
             <?php endif; ?>
         </div>

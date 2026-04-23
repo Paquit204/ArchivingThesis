@@ -76,8 +76,6 @@ function logAdminAction($conn, $user_id, $action, $table, $record_id, $descripti
     $log_stmt->close();
 }
 
-logAdminAction($conn, $user_id, "Admin accessed dashboard", "user_table", $user_id, "Admin $fullName accessed the admin dashboard");
-
 // ==================== NOTIFICATION HANDLERS ====================
 // MARK NOTIFICATION AS READ (via AJAX) - using is_read
 if (isset($_POST['mark_read']) && isset($_POST['notif_id'])) {
@@ -231,7 +229,6 @@ $notif_list->close();
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
-        /* Your existing CSS - keep as is */
         * {
             margin: 0;
             padding: 0;
@@ -942,7 +939,7 @@ $notif_list->close();
             color: #6b7280;
         }
 
-        /* Charts */
+        /* Charts - CENTERED */
         .charts-row {
             display: grid;
             grid-template-columns: repeat(2, 1fr);
@@ -958,6 +955,8 @@ $notif_list->close();
             transition: all 0.2s;
             display: flex;
             flex-direction: column;
+            align-items: center;
+            text-align: center;
         }
 
         .chart-card:hover {
@@ -972,14 +971,25 @@ $notif_list->close();
             margin-bottom: 20px;
             display: flex;
             align-items: center;
+            justify-content: center;
             gap: 8px;
+            text-align: center;
         }
 
         .chart-container {
-            height: 260px;
+            height: 300px;
             position: relative;
             width: 100%;
-            min-height: 250px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin: 0 auto;
+        }
+        
+        .chart-container canvas {
+            max-width: 100%;
+            max-height: 100%;
+            margin: 0 auto;
         }
 
         /* Cards Row */
@@ -1498,6 +1508,79 @@ $notif_list->close();
         </div>
     </main>
     
+    <!-- Add User Modal -->
+    <div id="addUserModal" class="modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1100; align-items: center; justify-content: center;">
+        <div class="modal-content" style="background: white; border-radius: 20px; width: 550px; max-width: 90%; max-height: 90vh; overflow-y: auto;">
+            <div class="modal-header" style="padding: 20px; border-bottom: 1px solid #ffcdd2; display: flex; justify-content: space-between; align-items: center;">
+                <h3 style="color: #d32f2f;"><i class="fas fa-user-plus"></i> Add New User</h3>
+                <span class="close-modal" style="font-size: 1.5rem; cursor: pointer;" onclick="closeAddUserModal()">&times;</span>
+            </div>
+            <form id="addUserForm" method="POST" action="users.php">
+                <div class="modal-body" style="padding: 25px;">
+                    <input type="hidden" name="action" value="add">
+                    <div class="form-row" style="display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-bottom: 18px;">
+                        <div class="form-group">
+                            <label>First Name <span style="color:#d32f2f;">*</span></label>
+                            <input type="text" name="first_name" class="form-control" style="width: 100%; padding: 10px 14px; border: 1px solid #ffcdd2; border-radius: 10px;" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Last Name <span style="color:#d32f2f;">*</span></label>
+                            <input type="text" name="last_name" class="form-control" style="width: 100%; padding: 10px 14px; border: 1px solid #ffcdd2; border-radius: 10px;" required>
+                        </div>
+                    </div>
+                    <div class="form-group" style="margin-bottom: 18px;">
+                        <label>Email <span style="color:#d32f2f;">*</span></label>
+                        <input type="email" name="email" class="form-control" style="width: 100%; padding: 10px 14px; border: 1px solid #ffcdd2; border-radius: 10px;" required>
+                    </div>
+                    <div class="form-group" style="margin-bottom: 18px;">
+                        <label>Username <span style="color:#d32f2f;">*</span></label>
+                        <input type="text" name="username" class="form-control" style="width: 100%; padding: 10px 14px; border: 1px solid #ffcdd2; border-radius: 10px;" required>
+                    </div>
+                    <div class="form-group" style="margin-bottom: 18px;">
+                        <label>Password <span id="passwordRequired" style="color:#d32f2f;">*</span></label>
+                        <input type="password" name="password" class="form-control" style="width: 100%; padding: 10px 14px; border: 1px solid #ffcdd2; border-radius: 10px;" placeholder="Enter password (min. 6 characters)">
+                        <small id="passwordNote" style="font-size:0.7rem; color:#6b7280; display:none;">Leave blank to keep current password</small>
+                    </div>
+                    <div class="form-group" style="margin-bottom: 18px;">
+                        <label>Role <span style="color:#d32f2f;">*</span></label>
+                        <select name="role_id" id="roleSelect" class="form-control" style="width: 100%; padding: 10px 14px; border: 1px solid #ffcdd2; border-radius: 10px;" required>
+                            <option value="1">Admin</option>
+                            <option value="2">Student</option>
+                            <option value="3">Research Adviser</option>
+                            <option value="4">Dean</option>
+                            <option value="5">Librarian</option>
+                            <option value="6">Coordinator</option>
+                        </select>
+                    </div>
+                    <!-- DEPARTMENT FIELD -->
+                    <div class="form-group" id="departmentGroup" style="margin-bottom: 18px; display: none;">
+                        <label>Department <span style="color:#d32f2f;">*</span></label>
+                        <select name="department" id="departmentSelect" class="form-control" style="width: 100%; padding: 10px 14px; border: 1px solid #ffcdd2; border-radius: 10px;">
+                            <option value="">-- Select Department --</option>
+                            <option value="BSIT">BS Information Technology (BSIT)</option>
+                            <option value="BSCRIM">BS Criminology (BSCRIM)</option>
+                            <option value="BSHTM">BS Hospitality Management (BSHTM)</option>
+                            <option value="BSED">BS Education (BSED)</option>
+                            <option value="BSBA">BS Business Administration (BSBA)</option>
+                        </select>
+                        <small style="font-size:0.7rem; color:#6b7280;">Required for Students and Research Advisers only</small>
+                    </div>
+                    <div class="form-group" style="margin-bottom: 18px;">
+                        <label>Status <span style="color:#d32f2f;">*</span></label>
+                        <select name="status" class="form-control" style="width: 100%; padding: 10px 14px; border: 1px solid #ffcdd2; border-radius: 10px;">
+                            <option value="Active">Active</option>
+                            <option value="Inactive">Inactive</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer" style="padding: 20px; border-top: 1px solid #ffcdd2; display: flex; justify-content: flex-end; gap: 12px;">
+                    <button type="button" class="btn-cancel" onclick="closeAddUserModal()" style="background: #fef2f2; color: #6b7280; border: none; padding: 8px 22px; border-radius: 8px; cursor: pointer;">Cancel</button>
+                    <button type="submit" class="btn-save" style="background: #d32f2f; color: white; border: none; padding: 8px 22px; border-radius: 8px; cursor: pointer;">Save User</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
     <script>
         window.userData = {
             stats: { 
@@ -1525,20 +1608,85 @@ $notif_list->close();
             const notificationBadge = document.getElementById('notificationBadge');
             const notificationList = document.getElementById('notificationList');
             const markAllReadBtn = document.getElementById('markAllReadBtn');
+            const roleSelect = document.getElementById('roleSelect');
+            const departmentGroup = document.getElementById('departmentGroup');
+            const departmentSelect = document.getElementById('departmentSelect');
+            
+            // Department Field Toggle
+            function toggleDepartmentField() {
+                if (!roleSelect) return;
+                const selectedRole = parseInt(roleSelect.value);
+                const needsDepartment = (selectedRole === 2 || selectedRole === 3);
+                
+                if (departmentGroup) {
+                    if (needsDepartment) {
+                        departmentGroup.style.display = 'block';
+                        if (departmentSelect) departmentSelect.required = true;
+                    } else {
+                        departmentGroup.style.display = 'none';
+                        if (departmentSelect) {
+                            departmentSelect.required = false;
+                            departmentSelect.value = '';
+                        }
+                    }
+                }
+            }
+            
+            if (roleSelect) {
+                roleSelect.addEventListener('change', toggleDepartmentField);
+            }
+            
+            window.toggleDepartmentField = toggleDepartmentField;
+            
+            // Modal Functions
+            window.openAddUserModal = function() {
+                const modal = document.getElementById('addUserModal');
+                if (modal) {
+                    modal.style.display = 'flex';
+                    const form = document.getElementById('addUserForm');
+                    if (form) form.reset();
+                    if (roleSelect) roleSelect.value = '1';
+                    toggleDepartmentField();
+                    const passwordField = document.querySelector('#addUserModal input[name="password"]');
+                    if (passwordField) passwordField.required = true;
+                    const passwordRequired = document.getElementById('passwordRequired');
+                    if (passwordRequired) passwordRequired.style.display = 'inline';
+                    const passwordNote = document.getElementById('passwordNote');
+                    if (passwordNote) passwordNote.style.display = 'none';
+                }
+            };
+            
+            window.closeAddUserModal = function() {
+                const modal = document.getElementById('addUserModal');
+                if (modal) modal.style.display = 'none';
+            };
+            
+            const addUserBtn = document.querySelector('.add-user-btn');
+            if (addUserBtn) {
+                addUserBtn.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    window.openAddUserModal();
+                });
+            }
+            
+            window.addEventListener('click', function(e) {
+                const modal = document.getElementById('addUserModal');
+                if (e.target === modal) {
+                    closeAddUserModal();
+                }
+            });
 
-            // ==================== SIDEBAR FUNCTIONS ====================
+            // SIDEBAR FUNCTIONS
             function openSidebar() {
                 sidebar.classList.add('open');
                 sidebarOverlay.classList.add('show');
                 document.body.style.overflow = 'hidden';
-                console.log('Sidebar opened');
             }
 
             function closeSidebar() {
                 sidebar.classList.remove('open');
                 sidebarOverlay.classList.remove('show');
                 document.body.style.overflow = '';
-                console.log('Sidebar closed');
             }
 
             function toggleSidebar(e) {
@@ -1550,34 +1698,30 @@ $notif_list->close();
                 }
             }
 
-            // Hamburger Button Event
             if (hamburgerBtn) {
                 hamburgerBtn.addEventListener('click', toggleSidebar);
-                console.log('Hamburger button initialized');
             }
 
-            // Close sidebar when clicking overlay
             if (sidebarOverlay) {
                 sidebarOverlay.addEventListener('click', closeSidebar);
             }
 
-            // Close sidebar on Escape key
             document.addEventListener('keydown', function(e) {
                 if (e.key === 'Escape') {
                     if (sidebar.classList.contains('open')) closeSidebar();
                     if (profileDropdown && profileDropdown.classList.contains('show')) profileDropdown.classList.remove('show');
                     if (notificationDropdown && notificationDropdown.classList.contains('show')) notificationDropdown.classList.remove('show');
+                    if (document.getElementById('addUserModal') && document.getElementById('addUserModal').style.display === 'flex') closeAddUserModal();
                 }
             });
 
-            // Close sidebar on window resize (if screen becomes larger)
             window.addEventListener('resize', function() {
                 if (window.innerWidth > 768 && sidebar.classList.contains('open')) {
                     closeSidebar();
                 }
             });
 
-            // ==================== PROFILE DROPDOWN ====================
+            // PROFILE DROPDOWN
             if (profileWrapper && profileDropdown) {
                 profileWrapper.addEventListener('click', function(e) {
                     e.stopPropagation();
@@ -1590,7 +1734,7 @@ $notif_list->close();
                 });
             }
 
-            // ==================== NOTIFICATION FUNCTIONS ====================
+            // NOTIFICATION FUNCTIONS
             if (notificationIcon) {
                 notificationIcon.addEventListener('click', function(e) {
                     e.stopPropagation();
@@ -1686,7 +1830,7 @@ $notif_list->close();
                 notificationBadge.style.display = 'flex';
             }
 
-            // ==================== DARK MODE ====================
+            // DARK MODE
             function initDarkMode() {
                 const isDark = localStorage.getItem('darkMode') === 'true';
                 if (isDark) {
@@ -1706,9 +1850,9 @@ $notif_list->close();
                 }
             }
 
-            // ==================== BALANCED CHARTS ====================
+            // CHARTS - CENTERED
             function initCharts() {
-                // User Distribution Chart - Balanced Doughnut
+                // User Distribution Chart
                 const distCtx = document.getElementById('userDistributionChart');
                 if (distCtx && window.userData) {
                     if (window.distChartInstance) window.distChartInstance.destroy();
@@ -1763,7 +1907,7 @@ $notif_list->close();
                                 }
                             },
                             layout: {
-                                padding: { top: 10, bottom: 10, left: 10, right: 10 }
+                                padding: { top: 20, bottom: 20, left: 20, right: 20 }
                             }
                         }
                     });
@@ -1869,11 +2013,9 @@ $notif_list->close();
                 }
             }
 
-            // ==================== INITIALIZE ====================
             initDarkMode();
             initCharts();
-
-            console.log('Admin Dashboard Initialized - Menu Bar Style Sidebar with Notifications');
+            console.log('Admin Dashboard Initialized - Charts Centered');
         });
     </script>
 </body>

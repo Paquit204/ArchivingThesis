@@ -17,6 +17,16 @@ $last_name = $_SESSION['last_name'] ?? '';
 $fullName = $first_name . " " . $last_name;
 $initials = strtoupper(substr($first_name, 0, 1) . substr($last_name, 0, 1));
 
+// Get faculty department
+$faculty_query = "SELECT department FROM user_table WHERE user_id = ?";
+$faculty_stmt = $conn->prepare($faculty_query);
+$faculty_stmt->bind_param("i", $user_id);
+$faculty_stmt->execute();
+$faculty_result = $faculty_stmt->get_result();
+$faculty_data = $faculty_result->fetch_assoc();
+$faculty_department = $faculty_data['department'] ?? '';
+$faculty_stmt->close();
+
 // ==================== HANDLE FORWARD TO DEAN ====================
 if (isset($_POST['forward_to_dean']) && isset($_POST['thesis_id'])) {
     header('Content-Type: application/json');
@@ -116,6 +126,7 @@ if ($user_data) {
     $last_name = $user_data['last_name'];
     $fullName = $first_name . " " . $last_name;
     $initials = strtoupper(substr($first_name, 0, 1) . substr($last_name, 0, 1));
+    $faculty_department = $user_data['department'] ?? '';
 }
 
 // MAKE SURE NOTIFICATIONS TABLE EXISTS
@@ -183,7 +194,7 @@ while ($row = $notif_list_result->fetch_assoc()) {
 }
 $notif_list_stmt->close();
 
-// ==================== GET STATISTICS - FIXED: Use thesis_status column ====================
+// ==================== GET STATISTICS - FILTERED BY DEPARTMENT ====================
 $pendingCount = 0;
 $approvedCount = 0;
 $rejectedCount = 0;
@@ -191,7 +202,7 @@ $archivedCount = 0;
 $forwardedCount = 0;
 $totalCount = 0;
 
-// Monthly data for chart
+// Monthly data for chart - FILTERED BY DEPARTMENT
 $monthlyData = [];
 for ($i = 6; $i >= 0; $i--) {
     $monthName = date('M', strtotime("-$i months"));
@@ -200,10 +211,10 @@ for ($i = 6; $i >= 0; $i--) {
 
 $table_check = $conn->query("SHOW TABLES LIKE 'thesis_table'");
 if ($table_check && $table_check->num_rows > 0) {
-    // Check if thesis_status column exists, if not use is_archived logic
+    // Check if thesis_status column exists
     $col_check = $conn->query("SHOW COLUMNS FROM thesis_table LIKE 'thesis_status'");
     if ($col_check && $col_check->num_rows > 0) {
-        // Use thesis_status column
+        // Use thesis_status column with department filter
         $countsQuery = "SELECT 
             SUM(CASE WHEN thesis_status = 'pending' THEN 1 ELSE 0 END) as pending,
             SUM(CASE WHEN thesis_status = 'approved' THEN 1 ELSE 0 END) as approved,
@@ -211,9 +222,10 @@ if ($table_check && $table_check->num_rows > 0) {
             SUM(CASE WHEN is_archived = 1 THEN 1 ELSE 0 END) as archived,
             SUM(CASE WHEN thesis_status = 'Forwarded_to_dean' THEN 1 ELSE 0 END) as forwarded,
             COUNT(*) as total
-        FROM thesis_table";
+        FROM thesis_table
+        WHERE department = ?";
     } else {
-        // Use is_archived logic - pending if not archived, archived if is_archived=1
+        // Use is_archived logic
         $countsQuery = "SELECT 
             SUM(CASE WHEN is_archived = 0 THEN 1 ELSE 0 END) as pending,
             0 as approved,
@@ -221,21 +233,23 @@ if ($table_check && $table_check->num_rows > 0) {
             SUM(CASE WHEN is_archived = 1 THEN 1 ELSE 0 END) as archived,
             0 as forwarded,
             COUNT(*) as total
-        FROM thesis_table";
+        FROM thesis_table
+        WHERE department = ?";
     }
     
-    $countsResult = $conn->query($countsQuery);
-    if ($countsResult) {
-        $counts = $countsResult->fetch_assoc();
-        $pendingCount = $counts['pending'] ?? 0;
-        $approvedCount = $counts['approved'] ?? 0;
-        $rejectedCount = $counts['rejected'] ?? 0;
-        $archivedCount = $counts['archived'] ?? 0;
-        $forwardedCount = $counts['forwarded'] ?? 0;
-        $totalCount = $counts['total'] ?? 0;
-    }
+    $countsResult = $conn->prepare($countsQuery);
+    $countsResult->bind_param("s", $faculty_department);
+    $countsResult->execute();
+    $counts = $countsResult->get_result()->fetch_assoc();
+    $pendingCount = $counts['pending'] ?? 0;
+    $approvedCount = $counts['approved'] ?? 0;
+    $rejectedCount = $counts['rejected'] ?? 0;
+    $archivedCount = $counts['archived'] ?? 0;
+    $forwardedCount = $counts['forwarded'] ?? 0;
+    $totalCount = $counts['total'] ?? 0;
+    $countsResult->close();
     
-    // Monthly query - FIXED
+    // Monthly query - FILTERED BY DEPARTMENT
     $col_check2 = $conn->query("SHOW COLUMNS FROM thesis_table LIKE 'thesis_status'");
     if ($col_check2 && $col_check2->num_rows > 0) {
         $monthlyQuery = "SELECT 
@@ -244,7 +258,7 @@ if ($table_check && $table_check->num_rows > 0) {
             SUM(CASE WHEN thesis_status = 'approved' THEN 1 ELSE 0 END) as approved,
             SUM(CASE WHEN thesis_status = 'rejected' THEN 1 ELSE 0 END) as rejected
         FROM thesis_table 
-        WHERE date_submitted >= DATE_SUB(NOW(), INTERVAL 6 MONTH)
+        WHERE department = ? AND date_submitted >= DATE_SUB(NOW(), INTERVAL 6 MONTH)
         GROUP BY DATE_FORMAT(date_submitted, '%b %Y')
         ORDER BY MIN(date_submitted) ASC";
     } else {
@@ -254,12 +268,15 @@ if ($table_check && $table_check->num_rows > 0) {
             0 as approved,
             0 as rejected
         FROM thesis_table 
-        WHERE date_submitted >= DATE_SUB(NOW(), INTERVAL 6 MONTH)
+        WHERE department = ? AND date_submitted >= DATE_SUB(NOW(), INTERVAL 6 MONTH)
         GROUP BY DATE_FORMAT(date_submitted, '%b %Y')
         ORDER BY MIN(date_submitted) ASC";
     }
     
-    $monthlyResult = $conn->query($monthlyQuery);
+    $monthlyStmt = $conn->prepare($monthlyQuery);
+    $monthlyStmt->bind_param("s", $faculty_department);
+    $monthlyStmt->execute();
+    $monthlyResult = $monthlyStmt->get_result();
     if ($monthlyResult) {
         while ($row = $monthlyResult->fetch_assoc()) {
             $monthlyData[$row['month']] = [
@@ -269,38 +286,44 @@ if ($table_check && $table_check->num_rows > 0) {
             ];
         }
     }
+    $monthlyStmt->close();
 }
 
-// GET PENDING THESES - FIXED
+// GET PENDING THESES - FILTERED BY DEPARTMENT
 $pendingTheses = [];
 $col_check3 = $conn->query("SHOW COLUMNS FROM thesis_table LIKE 'thesis_status'");
 if ($col_check3 && $col_check3->num_rows > 0) {
     $query = "SELECT t.*, u.first_name, u.last_name, u.email 
               FROM thesis_table t
               JOIN user_table u ON t.student_id = u.user_id
-              WHERE t.thesis_status = 'pending'
+              WHERE t.thesis_status = 'pending' AND t.department = ?
               ORDER BY t.date_submitted DESC 
               LIMIT 10";
+    $pendingStmt = $conn->prepare($query);
+    $pendingStmt->bind_param("s", $faculty_department);
 } else {
     $query = "SELECT t.*, u.first_name, u.last_name, u.email 
               FROM thesis_table t
               JOIN user_table u ON t.student_id = u.user_id
-              WHERE t.is_archived = 0
+              WHERE t.is_archived = 0 AND t.department = ?
               ORDER BY t.date_submitted DESC 
               LIMIT 10";
+    $pendingStmt = $conn->prepare($query);
+    $pendingStmt->bind_param("s", $faculty_department);
 }
-$result = $conn->query($query);
+$pendingStmt->execute();
+$result = $pendingStmt->get_result();
 if ($result) {
     while ($row = $result->fetch_assoc()) {
-        // Add status field for display
         if (!isset($row['thesis_status'])) {
             $row['thesis_status'] = $row['is_archived'] == 0 ? 'pending' : 'archived';
         }
         $pendingTheses[] = $row;
     }
 }
+$pendingStmt->close();
 
-// GET ALL SUBMISSIONS - FIXED
+// GET ALL SUBMISSIONS - FILTERED BY DEPARTMENT
 $allSubmissions = [];
 $currentFilter = isset($_GET['status']) ? $_GET['status'] : 'all';
 
@@ -312,17 +335,26 @@ if ($col_check4 && $col_check4->num_rows > 0) {
             u.last_name, 
             u.email
             FROM thesis_table t
-            JOIN user_table u ON t.student_id = u.user_id";
+            JOIN user_table u ON t.student_id = u.user_id
+            WHERE t.department = ?";
 
     if ($currentFilter != 'all') {
         if ($currentFilter == 'archived') {
-            $sql .= " WHERE t.is_archived = 1";
+            $sql .= " AND t.is_archived = 1";
         } else {
-            $sql .= " WHERE t.thesis_status = '" . $conn->real_escape_string($currentFilter) . "'";
+            $sql .= " AND t.thesis_status = ?";
         }
     }
 
     $sql .= " ORDER BY t.date_submitted DESC";
+    
+    if ($currentFilter != 'all' && $currentFilter != 'archived') {
+        $allStmt = $conn->prepare($sql);
+        $allStmt->bind_param("ss", $faculty_department, $currentFilter);
+    } else {
+        $allStmt = $conn->prepare($sql);
+        $allStmt->bind_param("s", $faculty_department);
+    }
 } else {
     $sql = "SELECT 
             t.*, 
@@ -330,26 +362,26 @@ if ($col_check4 && $col_check4->num_rows > 0) {
             u.last_name, 
             u.email
             FROM thesis_table t
-            JOIN user_table u ON t.student_id = u.user_id";
+            JOIN user_table u ON t.student_id = u.user_id
+            WHERE t.department = ?";
 
     if ($currentFilter != 'all') {
         if ($currentFilter == 'archived') {
-            $sql .= " WHERE t.is_archived = 1";
+            $sql .= " AND t.is_archived = 1";
         } elseif ($currentFilter == 'pending') {
-            $sql .= " WHERE t.is_archived = 0";
-        } else {
-            // For approved/rejected - wala tay column, so display all non-archived
-            $sql .= " WHERE t.is_archived = 0";
+            $sql .= " AND t.is_archived = 0";
         }
     }
 
     $sql .= " ORDER BY t.date_submitted DESC";
+    $allStmt = $conn->prepare($sql);
+    $allStmt->bind_param("s", $faculty_department);
 }
 
-$result = $conn->query($sql);
+$allStmt->execute();
+$result = $allStmt->get_result();
 if ($result) {
     while ($row = $result->fetch_assoc()) {
-        // Add status field for display
         if (!isset($row['thesis_status'])) {
             if ($row['is_archived'] == 1) {
                 $row['thesis_status'] = 'archived';
@@ -360,6 +392,7 @@ if ($result) {
         $allSubmissions[] = $row;
     }
 }
+$allStmt->close();
 
 $pageTitle = "Faculty Dashboard";
 ?>
@@ -374,6 +407,7 @@ $pageTitle = "Faculty Dashboard";
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <style>
+        /* Your existing CSS - keep as is */
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: 'Inter', sans-serif; background: #fef2f2; color: #1f2937; overflow-x: hidden; }
         body.dark-mode { background: #1a1a1a; color: #e0e0e0; }
@@ -460,6 +494,8 @@ $pageTitle = "Faculty Dashboard";
         .stat-icon { width: 60px; height: 60px; border-radius: 20px; display: flex; align-items: center; justify-content: center; font-size: 1.8rem; background: #fef2f2; color: #dc2626; }
         .stat-content h3 { font-size: 2rem; font-weight: 700; color: #ba0202; }
         .stat-content p { font-size: 0.8rem; color: #6c757d; }
+        
+        .department-badge { display: inline-block; padding: 4px 12px; background: #dc2626; color: white; border-radius: 20px; font-size: 0.7rem; font-weight: 500; margin-left: 10px; }
         
         .chart-container { background: white; border-radius: 24px; padding: 24px; margin-bottom: 32px; border: 1px solid #fee2e2; }
         body.dark-mode .chart-container { background: #2d2d2d; border-color: #991b1b; }
@@ -629,7 +665,9 @@ $pageTitle = "Faculty Dashboard";
         <div class="welcome-banner">
             <div class="welcome-info">
                 <h1>Research Adviser Dashboard</h1>
-                <p>Welcome back, <?= htmlspecialchars($first_name) ?>!</p>
+                <p>Welcome back, <?= htmlspecialchars($first_name) ?>! 
+                    Department: <strong><?= htmlspecialchars($faculty_department) ?></strong>
+                </p>
             </div>
             <div class="faculty-info">
                 <div class="faculty-name"><?= htmlspecialchars($fullName) ?></div>
@@ -647,7 +685,7 @@ $pageTitle = "Faculty Dashboard";
 
         <!-- Chart Section -->
         <div class="chart-container">
-            <h3><i class="fas fa-chart-line"></i> Thesis Submission Trends (Last 7 Months)</h3>
+            <h3><i class="fas fa-chart-line"></i> Thesis Submission Trends (Last 7 Months) - <?= htmlspecialchars($faculty_department) ?> Department</h3>
             <div class="chart-wrapper">
                 <canvas id="submissionChart"></canvas>
             </div>
@@ -688,7 +726,7 @@ $pageTitle = "Faculty Dashboard";
         <!-- All Submissions Table -->
         <div class="submissions-card">
             <div class="card-header">
-                <h3><i class="fas fa-file-alt"></i> All Thesis Submissions</h3>
+                <h3><i class="fas fa-file-alt"></i> All Thesis Submissions - <?= htmlspecialchars($faculty_department) ?> Department</h3>
                 <div class="filter-tabs">
                     <a href="?status=all" class="filter-btn <?= $currentFilter == 'all' ? 'active' : '' ?>">All (<?= $totalCount ?>)</a>
                     <a href="?status=pending" class="filter-btn <?= $currentFilter == 'pending' ? 'active' : '' ?>">Pending (<?= $pendingCount ?>)</a>
@@ -700,7 +738,7 @@ $pageTitle = "Faculty Dashboard";
             </div>
             <div class="table-responsive">
                 <?php if (empty($allSubmissions)): ?>
-                    <div class="empty-state"><i class="fas fa-folder-open"></i><p>No thesis submissions yet.</p></div>
+                    <div class="empty-state"><i class="fas fa-folder-open"></i><p>No thesis submissions yet for your department.</p></div>
                 <?php else: ?>
                     <table class="theses-table">
                         <thead>

@@ -2,11 +2,34 @@
 session_start();
 include("../config/db.php");
 
+// Optional: Include email only if file exists
+if (file_exists(__DIR__ . '/../config/smtp_config.php')) {
+    require_once __DIR__ . '/../config/smtp_config.php';
+    $emailEnabled = true;
+} else {
+    $emailEnabled = false;
+}
+
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
 
 $message = "";
 $success = "";
+
+// Create pending_invitations table if not exists
+$conn->query("CREATE TABLE IF NOT EXISTS pending_invitations (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    email VARCHAR(255) NOT NULL,
+    invited_by INT NOT NULL,
+    invited_by_name VARCHAR(255),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)");
+
+// Check if column exists, if not add it
+$check_column = $conn->query("SHOW COLUMNS FROM pending_invitations LIKE 'invited_by_name'");
+if ($check_column->num_rows == 0) {
+    $conn->query("ALTER TABLE pending_invitations ADD COLUMN invited_by_name VARCHAR(255) AFTER invited_by");
+}
 
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
     $first_name = trim($_POST['first_name'] ?? '');
@@ -17,10 +40,16 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     $cpassword = $_POST['cpassword'] ?? '';
     $role_id = 2;
     $contact_number = trim($_POST['contact_number'] ?? '');
-    $birth_date = $_POST['birth_date'] ?? '';
     $address = trim($_POST['address'] ?? '');
-    $department_id = $_POST['department_id'] ?? '';
+    $department_id = trim($_POST['department_id'] ?? '');
     
+    // Co-author invitation fields (optional)
+    $invite_coauthors = trim($_POST['invite_coauthors'] ?? '');
+    
+    // Create full name
+    $full_name = $first_name . " " . $last_name;
+    
+    // Validation
     if (empty($first_name) || empty($last_name) || empty($email) || empty($username) || empty($password)) {
         $message = "Please fill in all required fields.";
     } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
@@ -31,19 +60,24 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
         $message = "Passwords do not match.";
     } elseif (!empty($contact_number) && !preg_match('/^[0-9]{10,11}$/', $contact_number)) {
         $message = "Invalid contact number. Must be 10-11 digits.";
+    } elseif (empty($department_id)) {
+        $message = "Please select a department.";
     } else {
+        // Check if email exists
         $check_email = $conn->prepare("SELECT user_id FROM user_table WHERE email = ?");
         $check_email->bind_param("s", $email);
         $check_email->execute();
         $email_exists = $check_email->get_result()->num_rows > 0;
         $check_email->close();
         
+        // Check if username exists
         $check_user = $conn->prepare("SELECT user_id FROM user_table WHERE username = ?");
         $check_user->bind_param("s", $username);
         $check_user->execute();
         $username_exists = $check_user->get_result()->num_rows > 0;
         $check_user->close();
         
+        // Check if contact number exists
         $check_contact = $conn->prepare("SELECT user_id FROM user_table WHERE contact_number = ?");
         $check_contact->bind_param("s", $contact_number);
         $check_contact->execute();
@@ -59,11 +93,74 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
         } else {
             $hashed_password = password_hash($password, PASSWORD_DEFAULT);
             
-            $insert_user = $conn->prepare("INSERT INTO user_table (first_name, last_name, email, username, password, role_id, contact_number, birth_date, address) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
-            $insert_user->bind_param("sssssssss", $first_name, $last_name, $email, $username, $hashed_password, $role_id, $contact_number, $birth_date, $address);
+            // Insert user with department_id (no birth_date)
+            $insert_user = $conn->prepare("INSERT INTO user_table (first_name, last_name, email, username, password, role_id, contact_number, address, department_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+            $insert_user->bind_param("sssssssss", $first_name, $last_name, $email, $username, $hashed_password, $role_id, $contact_number, $address, $department_id);
             
             if ($insert_user->execute()) {
-                $success = "Registration successful! You can now login.";
+                $new_user_id = $insert_user->insert_id;
+                $success = "✅ Registration successful! You can now login.";
+                
+                // ==================== CO-AUTHOR INVITATION PROCESS ====================
+                if (!empty($invite_coauthors)) {
+                    $coauthors = array_map('trim', explode(',', $invite_coauthors));
+                    $invited_count = 0;
+                    $invited_list = array();
+                    
+                    foreach ($coauthors as $coauthor_email) {
+                        if (!empty($coauthor_email) && filter_var($coauthor_email, FILTER_VALIDATE_EMAIL) && $coauthor_email != $email) {
+                            // Check if co-author exists in system
+                            $check_coauthor = $conn->prepare("SELECT user_id, email FROM user_table WHERE email = ?");
+                            $check_coauthor->bind_param("s", $coauthor_email);
+                            $check_coauthor->execute();
+                            $coauthor_result = $check_coauthor->get_result();
+                            $coauthor = $coauthor_result->fetch_assoc();
+                            $check_coauthor->close();
+                            
+                            if ($coauthor) {
+                                // Co-author exists, create notification
+                                $notif_message = "📢 " . $full_name . " invited you to collaborate as co-author!";
+                                $notif_query = "INSERT INTO notifications (user_id, message, type, is_read, created_at) VALUES (?, ?, 'coauthor_invitation', 0, NOW())";
+                                $notif_stmt = $conn->prepare($notif_query);
+                                $notif_stmt->bind_param("is", $coauthor['user_id'], $notif_message);
+                                $notif_stmt->execute();
+                                $notif_stmt->close();
+                                
+                                $invited_count++;
+                                $invited_list[] = $coauthor_email;
+                            } else {
+                                // Co-author not yet registered - store pending invitation
+                                $pending_query = "INSERT INTO pending_invitations (email, invited_by, invited_by_name) VALUES (?, ?, ?)";
+                                $pending_stmt = $conn->prepare($pending_query);
+                                $pending_stmt->bind_param("sis", $coauthor_email, $new_user_id, $full_name);
+                                $pending_stmt->execute();
+                                $pending_stmt->close();
+                                
+                                $invited_count++;
+                                $invited_list[] = $coauthor_email . " (will be invited upon registration)";
+                            }
+                            
+                            // Try to send email invitation (if email is enabled)
+                            if ($emailEnabled && isset($emailSender) && method_exists($emailSender, 'sendInvitation')) {
+                                try {
+                                    $emailSender->sendInvitation(
+                                        $coauthor_email,
+                                        $full_name,
+                                        "Thesis Collaboration",
+                                        0
+                                    );
+                                } catch (Exception $e) {
+                                    // Email failed but registration continues
+                                }
+                            }
+                        }
+                    }
+                    
+                    if ($invited_count > 0) {
+                        $success .= " 🎉 " . $invited_count . " co-author invitation(s) sent to: " . implode(", ", $invited_list);
+                    }
+                }
+                
             } else {
                 $message = "Registration failed: " . $conn->error;
             }
@@ -156,7 +253,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
         /* CONTAINER & CARD */
         .container {
-            max-width: 650px;
+            max-width: 700px;
             margin: 0 auto;
         }
 
@@ -198,7 +295,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
             color: #2d7a2d;
         }
 
-        /* FORM - GIDUGANGAN OG SPACING */
+        /* FORM */
         .form-group {
             margin-bottom: 20px;
         }
@@ -222,6 +319,12 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
             color: #FE4853;
         }
 
+        label .optional {
+            color: #888;
+            font-weight: normal;
+            font-size: 0.75rem;
+        }
+
         input, select, textarea {
             width: 100%;
             padding: 12px 15px;
@@ -242,6 +345,25 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
             border-color: #FE4853;
             outline: none;
             box-shadow: 0 0 0 3px rgba(254, 72, 83, 0.1);
+        }
+
+        .invite-section {
+            background: linear-gradient(135deg, #fef2f2 0%, #fff5f5 100%);
+            border-radius: 12px;
+            padding: 15px;
+            margin-bottom: 20px;
+            border: 1px solid #fee2e2;
+        }
+
+        .invite-section label {
+            color: #732529;
+            margin-bottom: 8px;
+        }
+
+        .invite-note {
+            font-size: 0.7rem;
+            color: #888;
+            margin-top: 5px;
         }
 
         /* BUTTON */
@@ -345,6 +467,11 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
             background: #3d3d3d;
             border-color: #555;
             color: #e0e0e0;
+        }
+
+        body.dark-mode .invite-section {
+            background: #3d2a2a;
+            border-color: #732529;
         }
 
         body.dark-mode .alert {
@@ -455,8 +582,6 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
             <?php endif; ?>
 
             <form method="POST" autocomplete="off">
-                <input type="hidden" name="role_id" value="2">
-
                 <div class="form-row">
                     <div class="form-group">
                         <label>First Name <span>*</span></label>
@@ -489,36 +614,44 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                     </div>
                 </div>
 
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>Department <span>*</span></label>
-                        <select name="department_id" required>
-                            <option value="">Select Department</option>
-                            <?php
-                            $dept_query = "SELECT department_id, department_name FROM department_table";
-                            $dept_result = $conn->query($dept_query);
-                            if ($dept_result && $dept_result->num_rows > 0) {
-                                while ($dept = $dept_result->fetch_assoc()) {
-                                    echo '<option value="' . $dept['department_id'] . '">' . htmlspecialchars($dept['department_name']) . '</option>';
-                                }
+                <!-- DEPARTMENT SELECTION (REQUIRED) -->
+                <div class="form-group">
+                    <label>Department <span>*</span></label>
+                    <select name="department_id" required>
+                        <option value="">Select Department</option>
+                        <?php
+                        $dept_query = "SELECT department_id, department_name FROM department_table";
+                        $dept_result = $conn->query($dept_query);
+                        if ($dept_result && $dept_result->num_rows > 0) {
+                            while ($dept = $dept_result->fetch_assoc()) {
+                                echo '<option value="' . $dept['department_id'] . '">' . htmlspecialchars($dept['department_name']) . '</option>';
                             }
-                            ?>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label>Birth Date</label>
-                        <input type="date" name="birth_date">
-                    </div>
+                        } else {
+                            echo '<option value="">No departments available</option>';
+                        }
+                        ?>
+                    </select>
                 </div>
 
+                <!-- CONTACT NUMBER (REQUIRED) -->
                 <div class="form-group">
                     <label>Contact Number <span>*</span></label>
                     <input type="text" name="contact_number" placeholder="09xxxxxxxxx" required>
                 </div>
 
+                <!-- ADDRESS (OPTIONAL) -->
                 <div class="form-group">
-                    <label>Address</label>
+                    <label>Address <span class="optional"></span></label>
                     <textarea name="address" placeholder="Enter address"></textarea>
+                </div>
+
+                <!-- CO-AUTHOR INVITATION SECTION (OPTIONAL) -->
+                <div class="invite-section">
+                    <label>👥 Invite Co-Authors <span class="optional">(Optional)</span></label>
+                    <input type="text" name="invite_coauthors" placeholder="Enter email addresses separated by commas (e.g., john@example.com, jane@example.com)">
+                    <div class="invite-note">
+                        📧 Optional: Invite co-authors to collaborate with you. They will receive an invitation after registration.
+                    </div>
                 </div>
 
                 <button type="submit" class="btn-register">Register as Student</button>

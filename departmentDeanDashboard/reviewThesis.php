@@ -40,13 +40,23 @@ if ($thesis_id > 0) {
     if ($thesis_row = $thesis_result->fetch_assoc()) {
         $thesis = $thesis_row;
         $thesis_title = $thesis_row['title'];
-        $thesis_author = $thesis_row['adviser'] ?? 'Unknown Author';
         $thesis_abstract = $thesis_row['abstract'] ?? 'No abstract available.';
         $thesis_file = $thesis_row['file_path'] ?? '';
         $thesis_date = isset($thesis_row['date_submitted']) ? date('M d, Y', strtotime($thesis_row['date_submitted'])) : date('M d, Y');
-        $thesis_status = $thesis_row['status'] ?? 'pending';
+        $thesis_status = $thesis_row['is_read'] ?? 'pending';  // GAMITIN ANG is_read
         $student_id = $thesis_row['student_id'] ?? 0;
         $adviser_name = $thesis_row['adviser'] ?? '';
+        
+        // Get student name
+        $student_query = "SELECT first_name, last_name FROM user_table WHERE user_id = ?";
+        $student_stmt = $conn->prepare($student_query);
+        $student_stmt->bind_param("i", $student_id);
+        $student_stmt->execute();
+        $student_result = $student_stmt->get_result();
+        if ($student_row = $student_result->fetch_assoc()) {
+            $thesis_author = $student_row['first_name'] . " " . $student_row['last_name'];
+        }
+        $student_stmt->close();
     }
     $thesis_stmt->close();
 }
@@ -68,7 +78,6 @@ $coordinator_stmt->close();
 
 // ==================== FUNCTION TO NOTIFY LIBRARIAN ====================
 function notifyLibrarian($conn, $thesis_id, $thesis_title, $student_name, $dean_name) {
-    // Get all librarians (role_id = 5)
     $lib_query = "SELECT user_id FROM user_table WHERE role_id = 5";
     $lib_result = $conn->query($lib_query);
     
@@ -80,36 +89,33 @@ function notifyLibrarian($conn, $thesis_id, $thesis_title, $student_name, $dean_
     $notified = false;
     while ($librarian = $lib_result->fetch_assoc()) {
         $librarian_id = $librarian['user_id'];
-        $message = "📚 Thesis approved by Dean for archiving: \"" . $thesis_title . "\" from student " . $student_name . ". Approved by Dean: " . $dean_name;
+        $message = "📚 Thesis ready for archiving: \"" . $thesis_title . "\" from student " . $student_name . ". Approved by Dean: " . $dean_name;
         $link = "../librarian/archiveThesis.php?id=" . $thesis_id;
         
-        // FIXED: Changed 'status' to 'is_read'
         $insert_sql = "INSERT INTO notifications (user_id, thesis_id, message, type, link, is_read, created_at) 
                        VALUES ($librarian_id, $thesis_id, '$message', 'dean_approved', '$link', 0, NOW())";
         
         if ($conn->query($insert_sql)) {
             $notified = true;
-            error_log("Notification sent to librarian ID: $librarian_id");
         }
     }
     return $notified;
 }
 
-// Process form submission - Approve Thesis
-if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['approve_thesis'])) {
+// Process form submission - Forward to Librarian
+if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['forward_to_librarian'])) {
     $thesis_id_post = intval($_POST['thesis_id']);
     $dean_feedback = isset($_POST['dean_feedback']) ? trim($_POST['dean_feedback']) : '';
     
-    // Update thesis status to 'approved'
-    $update_query = "UPDATE thesis_table SET status = 'approved' WHERE thesis_id = ?";
+    // GAMITIN ANG is_read COLUMN
+    $update_query = "UPDATE thesis_table SET is_read = 'approved' WHERE thesis_id = ?";
     $update_stmt = $conn->prepare($update_query);
     $update_stmt->bind_param("i", $thesis_id_post);
     $update_stmt->execute();
     $update_stmt->close();
     
-    // 1. NOTIFY STUDENT - FIXED: changed 'status' to 'is_read'
     if ($student_id > 0) {
-        $student_msg = "✅ Good news! Your thesis \"" . $thesis_title . "\" has been APPROVED by Dean " . $fullName;
+        $student_msg = "✅ Good news! Your thesis \"" . $thesis_title . "\" has been APPROVED by Dean " . $fullName . " and forwarded to the Librarian for archiving.";
         if (!empty($dean_feedback)) {
             $student_msg .= " Feedback: " . $dean_feedback;
         }
@@ -117,7 +123,6 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['approve_thesis'])) {
         $conn->query($notif_student);
     }
     
-    // 2. NOTIFY ADVISER - FIXED: changed 'status' to 'is_read'
     if (!empty($adviser_name)) {
         $get_adviser = "SELECT user_id FROM user_table WHERE CONCAT(first_name, ' ', last_name) = ? AND role_id = 3";
         $adviser_stmt = $conn->prepare($get_adviser);
@@ -126,7 +131,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['approve_thesis'])) {
         $adviser_result = $adviser_stmt->get_result();
         if ($adviser_row = $adviser_result->fetch_assoc()) {
             $adviser_id = $adviser_row['user_id'];
-            $adviser_msg = "✅ Thesis \"" . $thesis_title . "\" has been APPROVED by Dean " . $fullName;
+            $adviser_msg = "✅ Thesis \"" . $thesis_title . "\" has been APPROVED by Dean " . $fullName . " and forwarded to the Librarian.";
             if (!empty($dean_feedback)) {
                 $adviser_msg .= " Feedback: " . $dean_feedback;
             }
@@ -136,66 +141,66 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['approve_thesis'])) {
         $adviser_stmt->close();
     }
     
-    // 3. NOTIFY LIBRARIAN
-    $student_name = $thesis['student_name'] ?? $thesis_author;
+    $student_name = $thesis_author;
     notifyLibrarian($conn, $thesis_id_post, $thesis_title, $student_name, $fullName);
     
-    // 4. NOTIFY DEAN (history) - FIXED: changed 'status' to 'is_read'
+    $get_coordinator = "SELECT user_id FROM user_table WHERE role_id = 4";
+    $coord_result = $conn->query($get_coordinator);
+    if ($coord_result && $coord_result->num_rows > 0) {
+        while ($coord = $coord_result->fetch_assoc()) {
+            $coord_msg = "✅ Thesis \"" . $thesis_title . "\" has been APPROVED by Dean " . $fullName . " and forwarded to Librarian.";
+            $notif_coord = "INSERT INTO notifications (user_id, thesis_id, message, type, is_read, created_at) VALUES (" . $coord['user_id'] . ", $thesis_id_post, '$coord_msg', 'coordinator_info', 0, NOW())";
+            $conn->query($notif_coord);
+        }
+    }
+    
     $dean_msg = "✅ You approved thesis \"" . $thesis_title . "\" and forwarded to Librarian";
     $notif_dean = "INSERT INTO notifications (user_id, thesis_id, message, type, is_read, created_at) VALUES ($user_id, $thesis_id_post, '$dean_msg', 'dean_action', 0, NOW())";
     $conn->query($notif_dean);
     
-    header("Location: dean.php?section=dashboard&msg=approved");
+    header("Location: dean.php?section=dashboard&msg=forwarded");
     exit;
 }
 
-// Process form submission - Reject Thesis
-if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['reject_thesis'])) {
+// Process form submission - Return to Coordinator
+if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['return_to_coordinator'])) {
     $thesis_id_post = intval($_POST['thesis_id']);
     $dean_feedback = isset($_POST['dean_feedback']) ? trim($_POST['dean_feedback']) : '';
     
-    // Update thesis status to 'rejected'
-    $update_query = "UPDATE thesis_table SET status = 'rejected' WHERE thesis_id = ?";
+    // GAMITIN ANG is_read COLUMN
+    $update_query = "UPDATE thesis_table SET is_read = 'revision_needed' WHERE thesis_id = ?";
     $update_stmt = $conn->prepare($update_query);
     $update_stmt->bind_param("i", $thesis_id_post);
     $update_stmt->execute();
     $update_stmt->close();
     
-    // 1. NOTIFY STUDENT - FIXED: changed 'status' to 'is_read'
     if ($student_id > 0) {
-        $student_msg = "❌ Your thesis \"" . $thesis_title . "\" has been REJECTED by Dean " . $fullName;
+        $student_msg = "❌ Your thesis \"" . $thesis_title . "\" needs revision as per Dean's review. Please work with your adviser.";
         if (!empty($dean_feedback)) {
-            $student_msg .= " Reason: " . $dean_feedback;
+            $student_msg .= " Feedback: " . $dean_feedback;
         }
-        $notif_student = "INSERT INTO notifications (user_id, thesis_id, message, type, is_read, created_at) VALUES ($student_id, $thesis_id_post, '$student_msg', 'student_rejected', 0, NOW())";
+        $notif_student = "INSERT INTO notifications (user_id, thesis_id, message, type, is_read, created_at) VALUES ($student_id, $thesis_id_post, '$student_msg', 'student_revision', 0, NOW())";
         $conn->query($notif_student);
     }
     
-    // 2. NOTIFY ADVISER - FIXED: changed 'status' to 'is_read'
-    if (!empty($adviser_name)) {
-        $get_adviser = "SELECT user_id FROM user_table WHERE CONCAT(first_name, ' ', last_name) = ? AND role_id = 3";
-        $adviser_stmt = $conn->prepare($get_adviser);
-        $adviser_stmt->bind_param("s", $adviser_name);
-        $adviser_stmt->execute();
-        $adviser_result = $adviser_stmt->get_result();
-        if ($adviser_row = $adviser_result->fetch_assoc()) {
-            $adviser_id = $adviser_row['user_id'];
-            $adviser_msg = "❌ Thesis \"" . $thesis_title . "\" has been REJECTED by Dean " . $fullName;
+    $get_coordinator = "SELECT user_id FROM user_table WHERE role_id = 4";
+    $coord_result = $conn->query($get_coordinator);
+    if ($coord_result && $coord_result->num_rows > 0) {
+        while ($coord = $coord_result->fetch_assoc()) {
+            $coord_msg = "⚠️ Thesis \"" . $thesis_title . "\" was returned by Dean " . $fullName . " for revision.";
             if (!empty($dean_feedback)) {
-                $adviser_msg .= " Reason: " . $dean_feedback;
+                $coord_msg .= " Feedback: " . $dean_feedback;
             }
-            $notif_adviser = "INSERT INTO notifications (user_id, thesis_id, message, type, is_read, created_at) VALUES ($adviser_id, $thesis_id_post, '$adviser_msg', 'dean_rejected', 0, NOW())";
-            $conn->query($notif_adviser);
+            $notif_coord = "INSERT INTO notifications (user_id, thesis_id, message, type, is_read, created_at) VALUES (" . $coord['user_id'] . ", $thesis_id_post, '$coord_msg', 'coordinator_revision', 0, NOW())";
+            $conn->query($notif_coord);
         }
-        $adviser_stmt->close();
     }
     
-    // 3. NOTIFY DEAN (history) - FIXED: changed 'status' to 'is_read'
-    $dean_msg = "❌ You rejected thesis \"" . $thesis_title . "\"";
+    $dean_msg = "❌ You returned thesis \"" . $thesis_title . "\" to Coordinator for revision";
     $notif_dean = "INSERT INTO notifications (user_id, thesis_id, message, type, is_read, created_at) VALUES ($user_id, $thesis_id_post, '$dean_msg', 'dean_action', 0, NOW())";
     $conn->query($notif_dean);
     
-    header("Location: dean.php?section=dashboard&msg=rejected");
+    header("Location: dean.php?section=dashboard&msg=returned");
     exit;
 }
 
@@ -206,15 +211,13 @@ $currentPage = basename($_SERVER['PHP_SELF']);
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Review Thesis | Dean Dashboard</title>
-    
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
-    
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Inter', sans-serif; background: #fef2f2; color: #1f2937; overflow-x: hidden; }
+        body { font-family: 'Inter', sans-serif; background: #fef2f2; color: #1f2937; }
         
         .top-nav {
             position: fixed; top: 0; right: 0; left: 0; height: 70px;
@@ -228,183 +231,104 @@ $currentPage = basename($_SERVER['PHP_SELF']);
             background: #fef2f2; border: none; border-radius: 8px; cursor: pointer;
             align-items: center; justify-content: center; }
         .hamburger span { display: block; width: 22px; height: 2px; background: #dc2626; border-radius: 2px; }
-        .hamburger:hover { background: #fee2e2; }
         .logo { font-size: 1.3rem; font-weight: 700; color: #991b1b; }
         .logo span { color: #dc2626; }
-        .search-area { display: flex; align-items: center; background: #fef2f2; padding: 8px 16px; border-radius: 40px; gap: 10px; }
-        .search-area i { color: #dc2626; }
-        .search-area input { border: none; background: none; outline: none; font-size: 0.85rem; width: 200px; }
-        .nav-right { display: flex; align-items: center; gap: 20px; position: relative; }
-        
         .profile-wrapper { position: relative; }
-        .profile-trigger { display: flex; align-items: center; gap: 12px; cursor: pointer; padding: 5px 0; }
-        .profile-name { font-weight: 500; color: #1f2937; font-size: 0.9rem; }
+        .profile-trigger { display: flex; align-items: center; gap: 12px; cursor: pointer; }
+        .profile-name { font-weight: 500; color: #1f2937; }
         .profile-avatar { width: 40px; height: 40px; background: linear-gradient(135deg, #dc2626, #991b1b);
             border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-weight: 600; }
         .profile-dropdown { position: absolute; top: 55px; right: 0; background: white; border-radius: 16px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.1); min-width: 200px; display: none; overflow: hidden;
-            z-index: 100; border: 1px solid #fee2e2; }
-        .profile-dropdown.show { display: block; animation: fadeSlideDown 0.2s ease; }
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1); min-width: 200px; display: none; z-index: 100; }
+        .profile-dropdown.show { display: block; }
         .profile-dropdown a { display: flex; align-items: center; gap: 12px; padding: 12px 18px;
-            text-decoration: none; color: #1f2937; font-size: 0.85rem; }
+            text-decoration: none; color: #1f2937; }
         .profile-dropdown a:hover { background: #fef2f2; color: #dc2626; }
         
-        @keyframes fadeSlideDown { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
-        
-        .sidebar { position: fixed; top: 0; left: -300px; width: 280px; height: 100%;
-            background: linear-gradient(180deg, #991b1b 0%, #dc2626 100%); display: flex;
-            flex-direction: column; z-index: 1000; transition: left 0.3s ease; box-shadow: 2px 0 10px rgba(0,0,0,0.05); }
+        .sidebar { position: fixed; top: 0; left: -280px; width: 280px; height: 100%;
+            background: linear-gradient(180deg, #991b1b 0%, #dc2626 100%);
+            z-index: 1000; transition: left 0.3s ease; }
         .sidebar.open { left: 0; }
         .logo-container { padding: 28px 24px; border-bottom: 1px solid rgba(255,255,255,0.15); }
         .logo-container .logo { color: white; }
-        .logo-container .logo span { color: #fecaca; }
-        .logo-sub { font-size: 0.7rem; color: #fecaca; margin-top: 6px; }
-        .nav-menu { flex: 1; padding: 24px 16px; display: flex; flex-direction: column; gap: 4px; }
+        .nav-menu { padding: 24px 16px; display: flex; flex-direction: column; gap: 4px; }
         .nav-item { display: flex; align-items: center; gap: 14px; padding: 12px 16px;
-            border-radius: 12px; text-decoration: none; color: #fecaca; font-weight: 500;
-            transition: all 0.2s; }
-        .nav-item:hover { background: rgba(255,255,255,0.15); color: white; transform: translateX(5px); }
+            border-radius: 12px; text-decoration: none; color: #fecaca; font-weight: 500; }
+        .nav-item:hover { background: rgba(255,255,255,0.15); color: white; }
         .nav-item.active { background: rgba(255,255,255,0.2); color: white; }
-        .nav-footer { padding: 20px 16px; border-top: 1px solid rgba(255,255,255,0.15); }
-        .theme-toggle { margin-bottom: 12px; }
-        .theme-toggle input { display: none; }
-        .toggle-label { display: flex; align-items: center; gap: 12px; cursor: pointer; }
-        .toggle-label i { font-size: 1rem; color: #fecaca; }
-        .logout-btn { display: flex; align-items: center; gap: 12px; padding: 10px 12px;
-            text-decoration: none; color: #fecaca; border-radius: 10px; }
-        .logout-btn:hover { background: rgba(255,255,255,0.15); color: white; }
         .sidebar-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             background: rgba(0,0,0,0.4); z-index: 999; display: none; }
         .sidebar-overlay.show { display: block; }
         
-        .main-content { margin-left: 0; margin-top: 70px; padding: 32px; transition: margin-left 0.3s ease; }
-        
-        .page-header { display: flex; justify-content: space-between; align-items: center;
-            margin-bottom: 32px; flex-wrap: wrap; gap: 15px; }
+        .main-content { margin-left: 0; margin-top: 70px; padding: 32px; }
+        .page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 32px; }
         .page-header h2 { font-size: 1.75rem; font-weight: 700; color: #991b1b; }
         .back-link { display: inline-flex; align-items: center; gap: 8px; color: #dc2626;
-            text-decoration: none; font-weight: 500; font-size: 0.9rem; padding: 8px 16px;
-            background: #fef2f2; border-radius: 30px; transition: all 0.2s; }
-        .back-link:hover { background: #fee2e2; transform: translateX(-3px); }
+            text-decoration: none; padding: 8px 16px; background: #fef2f2; border-radius: 30px; }
         
         .thesis-detail-card { background: white; border-radius: 24px; padding: 32px;
-            margin-bottom: 32px; border: 1px solid #fee2e2; box-shadow: 0 1px 2px rgba(0,0,0,0.03); }
+            margin-bottom: 32px; border: 1px solid #fee2e2; }
         .thesis-title { font-size: 1.5rem; font-weight: 700; color: #1f2937; margin-bottom: 16px;
             padding-bottom: 16px; border-bottom: 1px solid #fee2e2; }
         .thesis-meta { display: flex; gap: 24px; margin-bottom: 24px; flex-wrap: wrap; }
         .meta-item { display: flex; align-items: center; gap: 8px; color: #6b7280; font-size: 0.85rem; }
-        .meta-item i { color: #dc2626; width: 16px; }
-        .abstract-section { margin-bottom: 24px; }
-        .abstract-section h4 { font-size: 1rem; font-weight: 600; color: #991b1b; margin-bottom: 12px;
-            display: flex; align-items: center; gap: 8px; }
-        .abstract-section p { color: #4b5563; line-height: 1.6; font-size: 0.95rem; }
+        .meta-item i { color: #dc2626; }
+        .abstract-section h4 { font-size: 1rem; font-weight: 600; color: #991b1b; margin-bottom: 12px; }
+        .abstract-section p { color: #4b5563; line-height: 1.6; }
         
         .file-section { background: #fef2f2; border-radius: 16px; padding: 16px 20px;
-            margin-bottom: 24px; display: flex; align-items: center; justify-content: space-between;
-            flex-wrap: wrap; gap: 15px; }
+            margin-bottom: 24px; display: flex; justify-content: space-between; align-items: center; }
         .file-info { display: flex; align-items: center; gap: 12px; }
         .file-info i { font-size: 1.5rem; color: #dc2626; }
-        .file-name { font-weight: 600; color: #1f2937; font-size: 0.9rem; }
-        .download-btn { display: inline-flex; align-items: center; gap: 8px; padding: 8px 16px;
-            background: white; color: #dc2626; text-decoration: none; border-radius: 30px;
-            font-weight: 500; font-size: 0.8rem; border: 1px solid #fee2e2; transition: all 0.2s; }
-        .download-btn:hover { background: #fee2e2; transform: translateY(-2px); }
+        .download-btn { padding: 8px 16px; background: white; color: #dc2626;
+            text-decoration: none; border-radius: 30px; border: 1px solid #fee2e2; }
         
-        .pdf-viewer { margin-top: 1rem; border-radius: 12px; overflow: hidden; border: 1px solid #fee2e2; background: white; }
+        .pdf-viewer { border-radius: 12px; overflow: hidden; border: 1px solid #fee2e2; }
         .pdf-viewer iframe { width: 100%; height: 600px; border: none; }
-        .pdf-viewer .pdf-error { padding: 40px; text-align: center; color: #9ca3af; background: #fef2f2; }
-        .pdf-viewer .pdf-error i { font-size: 3rem; margin-bottom: 1rem; color: #dc2626; }
         
         .status-badge { display: inline-block; padding: 6px 14px; border-radius: 30px;
             font-size: 0.75rem; font-weight: 600; margin-bottom: 20px; }
         .status-pending { background: #fef3c7; color: #d97706; }
-        .status-forwarded_to_dean { background: #dbeafe; color: #2563eb; }
-        .status-approved { background: #d1fae5; color: #059669; }
-        .status-rejected { background: #fee2e2; color: #dc2626; }
         
         .action-cards { display: grid; grid-template-columns: repeat(2, 1fr); gap: 24px; margin-top: 24px; }
-        .action-card { background: white; border-radius: 24px; padding: 28px; border: 1px solid #fee2e2;
-            transition: all 0.2s; box-shadow: 0 1px 2px rgba(0,0,0,0.03); }
-        .action-card:hover { transform: translateY(-3px); box-shadow: 0 10px 25px -5px rgba(0,0,0,0.1);
-            border-color: #dc2626; }
+        .action-card { background: white; border-radius: 24px; padding: 28px; border: 1px solid #fee2e2; }
         .action-icon { width: 50px; height: 50px; background: #fef2f2; border-radius: 16px;
             display: flex; align-items: center; justify-content: center; margin-bottom: 20px; }
         .action-icon i { font-size: 1.5rem; color: #dc2626; }
         .action-card h3 { font-size: 1.2rem; font-weight: 600; color: #991b1b; margin-bottom: 12px; }
-        .action-card p { color: #6b7280; margin-bottom: 24px; line-height: 1.5; font-size: 0.9rem; }
+        .action-card p { color: #6b7280; margin-bottom: 24px; }
         
-        .btn-approve { display: inline-flex; align-items: center; justify-content: center; gap: 8px;
-            width: 100%; padding: 14px 20px; background: #10b981; color: white; border: none;
-            border-radius: 14px; font-weight: 600; font-size: 0.9rem; cursor: pointer;
-            transition: all 0.2s; }
-        .btn-approve:hover { background: #059669; transform: translateY(-2px); }
-        .btn-reject { display: inline-flex; align-items: center; justify-content: center; gap: 8px;
-            width: 100%; padding: 14px 20px; background: #dc3545; color: white; border: none;
-            border-radius: 14px; font-weight: 600; font-size: 0.9rem; cursor: pointer;
-            transition: all 0.2s; }
-        .btn-reject:hover { background: #b02a37; transform: translateY(-2px); }
+        .btn-forward { width: 100%; padding: 14px; background: #10b981; color: white;
+            border: none; border-radius: 14px; font-weight: 600; cursor: pointer; }
+        .btn-forward:hover { background: #059669; }
+        .btn-return { width: 100%; padding: 14px; background: #f59e0b; color: white;
+            border: none; border-radius: 14px; font-weight: 600; cursor: pointer; }
+        .btn-return:hover { background: #d97706; }
+        
+        .info-card { background: #e0f2fe; border: 1px solid #bae6fd; border-radius: 24px;
+            padding: 28px; text-align: center; }
+        .info-card i { font-size: 3rem; color: #0284c7; margin-bottom: 16px; }
+        .info-card h3 { color: #0369a1; margin-bottom: 12px; }
         
         .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             background: rgba(0,0,0,0.5); z-index: 1100; align-items: center; justify-content: center; }
         .modal.show { display: flex; }
-        .modal-content { background: white; border-radius: 24px; width: 500px; max-width: 90%;
-            animation: slideUp 0.3s ease; }
+        .modal-content { background: white; border-radius: 24px; width: 500px; max-width: 90%; }
         .modal-header { padding: 20px 24px; border-bottom: 1px solid #fee2e2;
             display: flex; justify-content: space-between; align-items: center; }
-        .modal-header h3 { font-size: 1.2rem; font-weight: 600; color: #991b1b; }
-        .close-modal { font-size: 1.5rem; cursor: pointer; color: #9ca3af; }
-        .close-modal:hover { color: #dc2626; }
+        .close-modal { font-size: 1.5rem; cursor: pointer; }
         .modal-body { padding: 24px; }
-        .form-group { margin-bottom: 20px; }
-        .form-group label { display: block; font-weight: 600; font-size: 0.85rem;
-            color: #1f2937; margin-bottom: 8px; }
-        .form-group textarea { width: 100%; padding: 12px; border: 1px solid #fee2e2;
-            border-radius: 12px; font-size: 0.85rem; resize: vertical; font-family: inherit; }
-        .form-group textarea:focus { outline: none; border-color: #dc2626; }
         .modal-footer { padding: 20px 24px; border-top: 1px solid #fee2e2;
             display: flex; justify-content: flex-end; gap: 12px; }
-        .btn-cancel { padding: 10px 20px; background: #fef2f2; color: #6b7280; border: none;
-            border-radius: 10px; cursor: pointer; font-weight: 500; }
-        .btn-cancel:hover { background: #fee2e2; }
-        
-        @keyframes slideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
-        
-        @media (max-width: 768px) {
-            .top-nav { left: 0; padding: 0 16px; }
-            .main-content { padding: 20px; }
-            .action-cards { grid-template-columns: 1fr; gap: 20px; }
-            .search-area { display: none; }
-            .profile-name { display: none; }
-            .pdf-viewer iframe { height: 400px; }
-        }
-        
-        @media (max-width: 480px) {
-            .main-content { padding: 16px; }
-            .thesis-detail-card { padding: 20px; }
-            .thesis-title { font-size: 1.2rem; }
-            .pdf-viewer iframe { height: 300px; }
-        }
+        .btn-cancel { padding: 10px 20px; background: #fef2f2; border: none; border-radius: 10px; cursor: pointer; }
         
         body.dark-mode { background: #1a1a1a; }
-        body.dark-mode .top-nav { background: #2d2d2d; border-bottom-color: #991b1b; }
-        body.dark-mode .logo { color: #fecaca; }
-        body.dark-mode .search-area { background: #3d3d3d; }
-        body.dark-mode .profile-name { color: #fecaca; }
-        body.dark-mode .thesis-detail-card { background: #2d2d2d; border-color: #991b1b; }
-        body.dark-mode .thesis-title { color: #fecaca; border-bottom-color: #991b1b; }
-        body.dark-mode .abstract-section p { color: #cbd5e1; }
-        body.dark-mode .file-section { background: #3d3d3d; }
-        body.dark-mode .file-name { color: #fecaca; }
-        body.dark-mode .download-btn { background: #2d2d2d; color: #fecaca; border-color: #991b1b; }
-        body.dark-mode .action-card { background: #2d2d2d; border-color: #991b1b; }
-        body.dark-mode .action-card h3 { color: #fecaca; }
-        body.dark-mode .profile-dropdown { background: #2d2d2d; border-color: #991b1b; }
-        body.dark-mode .profile-dropdown a { color: #e5e7eb; }
+        body.dark-mode .top-nav { background: #2d2d2d; }
+        body.dark-mode .thesis-detail-card { background: #2d2d2d; }
+        body.dark-mode .action-card { background: #2d2d2d; }
         body.dark-mode .modal-content { background: #2d2d2d; }
-        body.dark-mode .modal-header { border-bottom-color: #991b1b; }
-        body.dark-mode .form-group label { color: #e5e7eb; }
-        body.dark-mode .form-group textarea { background: #3d3d3d; border-color: #991b1b; color: white; }
-        body.dark-mode .pdf-viewer { background: #2d2d2d; border-color: #991b1b; }
+        body.dark-mode .profile-dropdown { background: #2d2d2d; }
+        body.dark-mode .profile-dropdown a { color: #e5e7eb; }
     </style>
 </head>
 <body>
@@ -414,7 +338,6 @@ $currentPage = basename($_SERVER['PHP_SELF']);
         <div class="nav-left">
             <button class="hamburger" id="hamburgerBtn"><span></span><span></span><span></span></button>
             <div class="logo">Thesis<span>Manager</span></div>
-            <div class="search-area"><i class="fas fa-search"></i><input type="text" placeholder="Search..."></div>
         </div>
         <div class="nav-right">
             <div class="profile-wrapper" id="profileWrapper">
@@ -433,7 +356,7 @@ $currentPage = basename($_SERVER['PHP_SELF']);
     </header>
 
     <aside class="sidebar" id="sidebar">
-        <div class="logo-container"><div class="logo">Thesis<span>Manager</span></div><div class="logo-sub">DEPARTMENT DEAN</div></div>
+        <div class="logo-container"><div class="logo">Thesis<span>Manager</span></div></div>
         <div class="nav-menu">
             <a href="dean.php?section=dashboard" class="nav-item"><i class="fas fa-th-large"></i><span>Dashboard</span></a>
             <a href="reviewThesis.php" class="nav-item active"><i class="fas fa-file-alt"></i><span>Review Theses</span></a>
@@ -441,7 +364,6 @@ $currentPage = basename($_SERVER['PHP_SELF']);
             <a href="dean.php?section=reports" class="nav-item"><i class="fas fa-chart-bar"></i><span>Reports</span></a>
         </div>
         <div class="nav-footer">
-            <div class="theme-toggle"><input type="checkbox" id="darkmode"><label for="darkmode" class="toggle-label"><i class="fas fa-sun"></i><i class="fas fa-moon"></i></label></div>
             <a href="/ArchivingThesis/authentication/logout.php" class="logout-btn"><i class="fas fa-sign-out-alt"></i><span>Logout</span></a>
         </div>
     </aside>
@@ -457,26 +379,23 @@ $currentPage = basename($_SERVER['PHP_SELF']);
             <div style="text-align: center; padding: 40px;">
                 <i class="fas fa-file-alt" style="font-size: 3rem; color: #dc2626; margin-bottom: 16px;"></i>
                 <h3 style="color: #991b1b;">Thesis Not Found</h3>
-                <p style="color: #6b7280;">The thesis you are looking for does not exist or has been removed.</p>
                 <a href="dean.php?section=dashboard" class="back-link" style="margin-top: 20px;">Go back to Dashboard</a>
             </div>
         </div>
         <?php else: ?>
         
         <div class="thesis-detail-card">
-            <div class="thesis-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 10px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap;">
                 <h1 class="thesis-title" style="margin-bottom: 0; padding-bottom: 0; border-bottom: none;"><?= htmlspecialchars($thesis_title) ?></h1>
-                <span class="status-badge status-<?= strtolower(str_replace('_', ' ', $thesis_status)) ?>">
-                    <?= htmlspecialchars(ucfirst(str_replace('_', ' ', $thesis_status))) ?>
+                <span class="status-badge status-pending">
+                    <?= htmlspecialchars(ucfirst($thesis_status)) ?>
                 </span>
             </div>
             
             <div class="thesis-meta">
-                <div class="meta-item"><i class="fas fa-user"></i><span><?= htmlspecialchars($thesis_author) ?></span></div>
+                <div class="meta-item"><i class="fas fa-user"></i><span>Student: <?= htmlspecialchars($thesis_author) ?></span></div>
+                <div class="meta-item"><i class="fas fa-chalkboard-user"></i><span>Adviser: <?= htmlspecialchars($adviser_name) ?></span></div>
                 <div class="meta-item"><i class="fas fa-calendar-alt"></i><span>Submitted: <?= $thesis_date ?></span></div>
-                <?php if (!empty($coordinator_name)): ?>
-                <div class="meta-item"><i class="fas fa-user-check"></i><span>Forwarded by: <?= htmlspecialchars($coordinator_name) ?></span></div>
-                <?php endif; ?>
             </div>
             
             <div class="abstract-section">
@@ -484,7 +403,6 @@ $currentPage = basename($_SERVER['PHP_SELF']);
                 <p><?= nl2br(htmlspecialchars($thesis_abstract)) ?></p>
             </div>
             
-            <!-- Manuscript File Section -->
             <div class="file-section">
                 <div class="file-info">
                     <i class="fas fa-file-pdf"></i>
@@ -495,105 +413,75 @@ $currentPage = basename($_SERVER['PHP_SELF']);
                 <?php endif; ?>
             </div>
             
-            <!-- PDF Viewer -->
-            <?php if (!empty($thesis_file)): 
-                $full_file_path = '../' . $thesis_file;
-                if (file_exists($full_file_path)):
-            ?>
+            <?php if (!empty($thesis_file) && file_exists('../' . $thesis_file)): ?>
             <div class="pdf-viewer">
-                <iframe src="<?= htmlspecialchars($full_file_path) ?>"></iframe>
-            </div>
-            <?php else: ?>
-            <div class="pdf-viewer">
-                <div class="pdf-error"><i class="fas fa-file-pdf"></i><p>PDF file not found on server.</p></div>
-            </div>
-            <?php endif; ?>
-            <?php else: ?>
-            <div class="pdf-viewer">
-                <div class="pdf-error"><i class="fas fa-file-pdf"></i><p>No manuscript file uploaded.</p></div>
+                <iframe src="<?= htmlspecialchars('../' . $thesis_file) ?>"></iframe>
             </div>
             <?php endif; ?>
         </div>
 
-        <?php if ($thesis_status == 'forwarded_to_dean'): ?>
+        <!-- ACTION CARDS -->
         <div class="action-cards">
             <div class="action-card">
-                <div class="action-icon"><i class="fas fa-check-circle"></i></div>
-                <h3>Approve Thesis</h3>
-                <p>Approve this thesis. The student, adviser, and librarian will be notified for archiving.</p>
-                <button class="btn-approve" onclick="openApproveModal()"><i class="fas fa-check"></i> Approve & Forward to Librarian</button>
+                <div class="action-icon"><i class="fas fa-paper-plane"></i></div>
+                <h3>Forward to Librarian</h3>
+                <p>Approve this thesis and forward to the Librarian for final archiving.</p>
+                <button class="btn-forward" onclick="openForwardModal()"><i class="fas fa-paper-plane"></i> Forward to Librarian</button>
             </div>
             <div class="action-card">
-                <div class="action-icon"><i class="fas fa-times-circle"></i></div>
-                <h3>Reject Thesis</h3>
-                <p>Reject this thesis and provide feedback. The student and adviser will be notified.</p>
-                <button class="btn-reject" onclick="openRejectModal()"><i class="fas fa-times"></i> Reject Thesis</button>
+                <div class="action-icon"><i class="fas fa-undo-alt"></i></div>
+                <h3>Return to Coordinator</h3>
+                <p>Return this thesis to the Coordinator for revision. Provide feedback below.</p>
+                <button class="btn-return" onclick="openReturnModal()"><i class="fas fa-undo"></i> Return to Coordinator</button>
             </div>
         </div>
-        <?php elseif ($thesis_status == 'approved'): ?>
-        <div class="action-card" style="grid-column: span 2;">
-            <div class="action-icon"><i class="fas fa-check-circle"></i></div>
-            <h3>Thesis Approved</h3>
-            <p>This thesis has been approved by the Dean. The Librarian has been notified for archiving.</p>
-        </div>
-        <?php elseif ($thesis_status == 'rejected'): ?>
-        <div class="action-card" style="grid-column: span 2;">
-            <div class="action-icon"><i class="fas fa-times-circle"></i></div>
-            <h3>Thesis Rejected</h3>
-            <p>This thesis has been rejected by the Dean. The student has been notified.</p>
-        </div>
-        <?php else: ?>
-        <div class="action-card" style="grid-column: span 2;">
-            <div class="action-icon"><i class="fas fa-info-circle"></i></div>
-            <h3>Pending Coordinator Review</h3>
-            <p>This thesis is still pending review by the Coordinator. Once forwarded, you will be able to review it.</p>
-        </div>
-        <?php endif; ?>
         
         <?php endif; ?>
     </main>
 
-    <!-- Approve Modal -->
-    <div id="approveModal" class="modal">
+    <!-- Forward Modal -->
+    <div id="forwardModal" class="modal">
         <div class="modal-content">
-            <div class="modal-header"><h3 style="color:#10b981;"><i class="fas fa-check-circle"></i> Approve Thesis</h3>
-                <span class="close-modal" onclick="closeApproveModal()">&times;</span>
+            <div class="modal-header">
+                <h3 style="color:#10b981;"><i class="fas fa-paper-plane"></i> Forward to Librarian</h3>
+                <span class="close-modal" onclick="closeForwardModal()">&times;</span>
             </div>
-            <form method="POST" action="">
+            <form method="POST">
                 <div class="modal-body">
                     <input type="hidden" name="thesis_id" value="<?= $thesis_id ?>">
-                    <input type="hidden" name="approve_thesis" value="1">
+                    <input type="hidden" name="forward_to_librarian" value="1">
                     <div class="form-group">
                         <label>Feedback (Optional)</label>
-                        <textarea name="dean_feedback" rows="3" placeholder="Optional feedback for the student and adviser..."></textarea>
+                        <textarea name="dean_feedback" rows="3" placeholder="Optional feedback..."></textarea>
                     </div>
                 </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn-cancel" onclick="closeApproveModal()">Cancel</button>
-                    <button type="submit" class="btn-approve">Confirm Approve</button>
+                    <button type="button" class="btn-cancel" onclick="closeForwardModal()">Cancel</button>
+                    <button type="submit" class="btn-forward">Confirm Forward</button>
                 </div>
             </form>
         </div>
     </div>
 
-    <!-- Reject Modal -->
-    <div id="rejectModal" class="modal">
+    <!-- Return Modal -->
+    <div id="returnModal" class="modal">
         <div class="modal-content">
-            <div class="modal-header"><h3 style="color:#dc3545;"><i class="fas fa-times-circle"></i> Reject Thesis</h3>
-                <span class="close-modal" onclick="closeRejectModal()">&times;</span>
+            <div class="modal-header">
+                <h3 style="color:#f59e0b;"><i class="fas fa-undo-alt"></i> Return to Coordinator</h3>
+                <span class="close-modal" onclick="closeReturnModal()">&times;</span>
             </div>
-            <form method="POST" action="">
+            <form method="POST">
                 <div class="modal-body">
                     <input type="hidden" name="thesis_id" value="<?= $thesis_id ?>">
-                    <input type="hidden" name="reject_thesis" value="1">
+                    <input type="hidden" name="return_to_coordinator" value="1">
                     <div class="form-group">
-                        <label>Reason for Rejection <span style="color:#dc3545;">*</span></label>
-                        <textarea name="dean_feedback" rows="3" placeholder="Please provide reason for rejection..." required></textarea>
+                        <label>Reason for Return <span style="color:#f59e0b;">*</span></label>
+                        <textarea name="dean_feedback" rows="3" placeholder="Please provide reason..." required></textarea>
                     </div>
                 </div>
                 <div class="modal-footer">
-                    <button type="button" class="btn-cancel" onclick="closeRejectModal()">Cancel</button>
-                    <button type="submit" class="btn-reject">Confirm Reject</button>
+                    <button type="button" class="btn-cancel" onclick="closeReturnModal()">Cancel</button>
+                    <button type="submit" class="btn-return">Confirm Return</button>
                 </div>
             </form>
         </div>
@@ -605,51 +493,39 @@ $currentPage = basename($_SERVER['PHP_SELF']);
         const sidebarOverlay = document.getElementById('sidebarOverlay');
         const profileWrapper = document.getElementById('profileWrapper');
         const profileDropdown = document.getElementById('profileDropdown');
-        const darkModeToggle = document.getElementById('darkmode');
-        const approveModal = document.getElementById('approveModal');
-        const rejectModal = document.getElementById('rejectModal');
+        const forwardModal = document.getElementById('forwardModal');
+        const returnModal = document.getElementById('returnModal');
 
-        function openSidebar() { sidebar.classList.add('open'); sidebarOverlay.classList.add('show'); document.body.style.overflow = 'hidden'; }
-        function closeSidebar() { sidebar.classList.remove('open'); sidebarOverlay.classList.remove('show'); document.body.style.overflow = ''; }
-        function toggleSidebar(e) { e.stopPropagation(); if (sidebar.classList.contains('open')) closeSidebar(); else openSidebar(); }
-        
-        if (hamburgerBtn) hamburgerBtn.addEventListener('click', toggleSidebar);
-        if (sidebarOverlay) sidebarOverlay.addEventListener('click', closeSidebar);
-        
-        document.addEventListener('keydown', function(e) { if (e.key === 'Escape') {
-            if (sidebar.classList.contains('open')) closeSidebar();
-            if (profileDropdown.classList.contains('show')) profileDropdown.classList.remove('show');
-            if (approveModal.classList.contains('show')) closeApproveModal();
-            if (rejectModal.classList.contains('show')) closeRejectModal();
-        }});
-        
-        window.addEventListener('resize', function() { if (window.innerWidth > 768 && sidebar.classList.contains('open')) closeSidebar(); });
-        
-        function toggleProfileDropdown(e) { e.stopPropagation(); profileDropdown.classList.toggle('show'); }
-        function closeProfileDropdown(e) { if (!profileWrapper.contains(e.target)) profileDropdown.classList.remove('show'); }
-        if (profileWrapper) { profileWrapper.addEventListener('click', toggleProfileDropdown); document.addEventListener('click', closeProfileDropdown); }
-        
-        function initDarkMode() {
-            const isDark = localStorage.getItem('darkMode') === 'true';
-            if (isDark) { document.body.classList.add('dark-mode'); if (darkModeToggle) darkModeToggle.checked = true; }
-            if (darkModeToggle) { darkModeToggle.addEventListener('change', function() {
-                if (this.checked) { document.body.classList.add('dark-mode'); localStorage.setItem('darkMode', 'true'); }
-                else { document.body.classList.remove('dark-mode'); localStorage.setItem('darkMode', 'false'); }
-            }); }
+        function toggleSidebar() { 
+            sidebar.classList.toggle('open'); 
+            sidebarOverlay.classList.toggle('show');
         }
         
-        function openApproveModal() { if (approveModal) approveModal.classList.add('show'); }
-        function closeApproveModal() { if (approveModal) approveModal.classList.remove('show'); }
-        function openRejectModal() { if (rejectModal) rejectModal.classList.add('show'); }
-        function closeRejectModal() { if (rejectModal) rejectModal.classList.remove('show'); }
+        hamburgerBtn.addEventListener('click', toggleSidebar);
+        sidebarOverlay.addEventListener('click', toggleSidebar);
+        
+        profileWrapper.addEventListener('click', function(e) {
+            e.stopPropagation();
+            profileDropdown.classList.toggle('show');
+        });
+        
+        document.addEventListener('click', function() {
+            profileDropdown.classList.remove('show');
+        });
+        
+        function openForwardModal() { forwardModal.classList.add('show'); }
+        function closeForwardModal() { forwardModal.classList.remove('show'); }
+        function openReturnModal() { returnModal.classList.add('show'); }
+        function closeReturnModal() { returnModal.classList.remove('show'); }
         
         window.onclick = function(event) {
-            if (event.target === approveModal) closeApproveModal();
-            if (event.target === rejectModal) closeRejectModal();
+            if (event.target === forwardModal) closeForwardModal();
+            if (event.target === returnModal) closeReturnModal();
         }
         
-        initDarkMode();
-        console.log('Dean Review Thesis Page Initialized');
+        // Dark mode
+        const isDark = localStorage.getItem('darkMode') === 'true';
+        if (isDark) document.body.classList.add('dark-mode');
     </script>
 </body>
 </html>

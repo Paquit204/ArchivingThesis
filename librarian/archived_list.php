@@ -86,18 +86,55 @@ if (isset($_POST['mark_all_read'])) {
     exit;
 }
 
-// ==================== GET ARCHIVED THESES - FIXED: Use is_archived = 1 ====================
-$archived_theses = [];
+// ==================== GET ARCHIVED THESES - GROUPED BY DEPARTMENT ====================
+$archived_by_dept = [];
+$departments = ['BSIT', 'BSCRIM', 'BSHTM', 'BSED', 'BSBA'];
+
+// Department colors
+$dept_colors = [
+    'BSIT' => '#3b82f6',
+    'BSCRIM' => '#10b981',
+    'BSHTM' => '#f59e0b',
+    'BSED' => '#8b5cf6',
+    'BSBA' => '#ef4444'
+];
+
+// Get all archived theses
 $archived_query = "SELECT t.*, u.first_name, u.last_name, u.email 
                    FROM thesis_table t
                    JOIN user_table u ON t.student_id = u.user_id
                    WHERE t.is_archived = 1
-                   ORDER BY t.archived_date DESC";
+                   AND t.department IN ('BSIT', 'BSCRIM', 'BSHTM', 'BSED', 'BSBA')
+                   ORDER BY t.department, t.archived_date DESC";
 $archived_result = $conn->query($archived_query);
+
 if ($archived_result && $archived_result->num_rows > 0) {
     while ($row = $archived_result->fetch_assoc()) {
-        $archived_theses[] = $row;
+        $dept = $row['department'] ?? 'N/A';
+        if (!isset($archived_by_dept[$dept])) {
+            $archived_by_dept[$dept] = [];
+        }
+        $archived_by_dept[$dept][] = $row;
     }
+}
+
+// Sort departments according to predefined order
+$sorted_archived = [];
+foreach ($departments as $dept) {
+    if (isset($archived_by_dept[$dept])) {
+        $sorted_archived[$dept] = $archived_by_dept[$dept];
+    }
+}
+// Add any other departments at the end
+foreach ($archived_by_dept as $dept => $theses) {
+    if (!in_array($dept, $departments)) {
+        $sorted_archived[$dept] = $theses;
+    }
+}
+
+$total_archived = 0;
+foreach ($sorted_archived as $theses) {
+    $total_archived += count($theses);
 }
 
 $pageTitle = "Archived Theses List";
@@ -204,14 +241,51 @@ $pageTitle = "Archived Theses List";
         .stat-details h3 { font-size: 1.8rem; font-weight: 700; color: #991b1b; margin-bottom: 5px; }
         .stat-details p { font-size: 0.8rem; color: #6b7280; }
         
-        .theses-section { background: white; border-radius: 24px; padding: 24px; border: 1px solid #ffcdd2; }
-        .table-responsive { overflow-x: auto; }
+        /* Department Sections */
+        .dept-archive-section {
+            margin-bottom: 32px;
+            background: white;
+            border-radius: 20px;
+            overflow: hidden;
+            border: 1px solid #ffcdd2;
+        }
+        .dept-archive-header {
+            padding: 16px 24px;
+            background: #fef2f2;
+            border-bottom: 1px solid #fee2e2;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .dept-archive-header .dept-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+        .dept-archive-header h3 {
+            font-size: 1rem;
+            font-weight: 600;
+            color: #1f2937;
+            margin: 0;
+        }
+        .dept-archive-header .badge {
+            background: #dc2626;
+            color: white;
+            padding: 2px 12px;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            font-weight: 500;
+            margin-left: 10px;
+        }
+        .table-responsive { overflow-x: auto; padding: 0 24px 24px 24px; }
         .theses-table { width: 100%; border-collapse: collapse; }
-        .theses-table th { text-align: left; padding: 12px; color: #6b7280; font-weight: 600; font-size: 0.7rem; text-transform: uppercase; border-bottom: 1px solid #ffcdd2; }
-        .theses-table td { padding: 12px; border-bottom: 1px solid #fef2f2; font-size: 0.85rem; }
+        .theses-table th { text-align: left; padding: 12px 8px; color: #6b7280; font-weight: 600; font-size: 0.7rem; text-transform: uppercase; border-bottom: 1px solid #fee2e2; }
+        .theses-table td { padding: 12px 8px; border-bottom: 1px solid #fef2f2; font-size: 0.85rem; }
+        .theses-table tr:hover td { background: #fef2f2; }
         .status-badge { display: inline-block; padding: 4px 10px; border-radius: 30px; font-size: 0.7rem; font-weight: 500; }
         .status-badge.archived { background: #d1ecf1; color: #0c5460; }
-        .btn-view { background: #dc2626; color: white; padding: 6px 16px; border-radius: 20px; text-decoration: none; font-size: 0.75rem; font-weight: 500; transition: all 0.2s; }
+        .btn-view { background: #dc2626; color: white; padding: 5px 14px; border-radius: 20px; text-decoration: none; font-size: 0.7rem; font-weight: 500; transition: all 0.2s; display: inline-block; }
         .btn-view:hover { background: #991b1b; transform: translateY(-2px); }
         .empty-state { text-align: center; padding: 40px; color: #9ca3af; }
         .empty-state i { font-size: 3rem; margin-bottom: 12px; color: #dc2626; }
@@ -221,12 +295,17 @@ $pageTitle = "Archived Theses List";
             .stats-grid { grid-template-columns: 1fr; }
             .search-area, .profile-name { display: none; }
             .notification-dropdown { width: 320px; right: -10px; }
+            .dept-archive-header { flex-wrap: wrap; }
+            .table-responsive { padding: 0 16px 16px 16px; }
         }
         
         body.dark-mode { background: #1a1a1a; }
-        body.dark-mode .top-nav, body.dark-mode .stat-card, body.dark-mode .theses-section, body.dark-mode .notification-dropdown { background: #2d2d2d; border-color: #991b1b; }
+        body.dark-mode .top-nav, body.dark-mode .stat-card, body.dark-mode .dept-archive-section, body.dark-mode .notification-dropdown { background: #2d2d2d; border-color: #991b1b; }
         body.dark-mode .stat-details h3, body.dark-mode .page-header h1 { color: #fecaca; }
+        body.dark-mode .dept-archive-header { background: #3d3d3d; border-bottom-color: #991b1b; }
+        body.dark-mode .dept-archive-header h3 { color: #fecaca; }
         body.dark-mode .theses-table td { color: #e5e7eb; border-bottom-color: #3d3d3d; }
+        body.dark-mode .theses-table tr:hover td { background: #3d3d3d; }
         body.dark-mode .notification-item:hover { background: #3d3d3d; }
         body.dark-mode .notification-item.unread { background: #3a2a2a; }
     </style>
@@ -303,44 +382,62 @@ $pageTitle = "Archived Theses List";
     <main class="main-content">
         <div class="page-header">
             <h1><i class="fas fa-archive"></i> Archived Theses</h1>
-            <p>List of all archived theses in the system</p>
+            <p>List of all archived theses organized by department</p>
         </div>
 
         <div class="stats-grid">
-            <div class="stat-card"><div class="stat-icon"><i class="fas fa-archive"></i></div><div class="stat-details"><h3><?= number_format(count($archived_theses)) ?></h3><p>Total Archived</p></div></div>
-            <div class="stat-card"><div class="stat-icon"><i class="fas fa-calendar"></i></div><div class="stat-details"><h3><?= number_format(count($archived_theses)) ?></h3><p>Archived Theses</p></div></div>
-            <div class="stat-card"><div class="stat-icon"><i class="fas fa-book"></i></div><div class="stat-details"><h3><?= number_format(count($archived_theses)) ?></h3><p>Total Records</p></div></div>
+            <div class="stat-card"><div class="stat-icon"><i class="fas fa-archive"></i></div><div class="stat-details"><h3><?= number_format($total_archived) ?></h3><p>Total Archived</p></div></div>
+            <div class="stat-card"><div class="stat-icon"><i class="fas fa-building"></i></div><div class="stat-details"><h3><?= number_format(count($sorted_archived)) ?></h3><p>Departments</p></div></div>
+            <div class="stat-card"><div class="stat-icon"><i class="fas fa-calendar"></i></div><div class="stat-details"><h3><?= date('Y') ?></h3><p>Current Year</p></div></div>
         </div>
 
-        <div class="theses-section">
-            <h3 style="margin-bottom: 20px; color: #991b1b;"><i class="fas fa-folder-open"></i> Archived Theses List</h3>
-            <?php if (empty($archived_theses)): ?>
+        <!-- ARCHIVED THESES GROUPED BY DEPARTMENT -->
+        <?php if (empty($sorted_archived)): ?>
+            <div class="dept-archive-section">
                 <div class="empty-state"><i class="fas fa-archive"></i><p>No archived theses yet.</p></div>
-            <?php else: ?>
+            </div>
+        <?php else: ?>
+            <?php foreach ($sorted_archived as $dept => $theses): 
+                $dept_color = $dept_colors[$dept] ?? '#6b7280';
+            ?>
+            <div class="dept-archive-section">
+                <div class="dept-archive-header">
+                    <span class="dept-dot" style="background: <?= $dept_color ?>;"></span>
+                    <h3><?= htmlspecialchars($dept) ?></h3>
+                    <span class="badge"><?= count($theses) ?> theses</span>
+                </div>
                 <div class="table-responsive">
                     <table class="theses-table">
                         <thead>
-                            <tr><th>ID</th><th>Thesis Title</th><th>Author</th><th>Student</th><th>Department</th><th>Archived Date</th><th>Status</th><th>Action</th></tr>
+                            <tr>
+                                <th>ID</th>
+                                <th>Thesis Title</th>
+                                <th>Author</th>
+                                <th>Student</th>
+                                <th>Archived Date</th>
+                                <th>Status</th>
+                                <th>Action</th>
+                            </tr>
                         </thead>
                         <tbody>
                             <?php $counter = 1; ?>
-                            <?php foreach ($archived_theses as $thesis): ?>
+                            <?php foreach ($theses as $thesis): ?>
                             <tr>
                                 <td><?= $counter++ ?></td>
                                 <td><strong><?= htmlspecialchars($thesis['title']) ?></strong></td>
                                 <td><?= htmlspecialchars($thesis['adviser'] ?? 'Unknown') ?></td>
                                 <td><?= htmlspecialchars($thesis['first_name'] . ' ' . $thesis['last_name']) ?></td>
-                                <td><?= htmlspecialchars($thesis['department'] ?? 'N/A') ?></td>
                                 <td><?= isset($thesis['archived_date']) ? date('M d, Y', strtotime($thesis['archived_date'])) : date('M d, Y', strtotime($thesis['date_submitted'])) ?></td>
-                                <td><span class="status-badge archived">Archived</span></td>
+                                <td><span class="status-badge archived"><i class="fas fa-check-circle"></i> Archived</span></td>
                                 <td><a href="view_thesis.php?id=<?= $thesis['thesis_id'] ?>" class="btn-view"><i class="fas fa-eye"></i> View</a></td>
                             </tr>
                             <?php endforeach; ?>
                         </tbody>
                     </table>
                 </div>
-            <?php endif; ?>
-        </div>
+            </div>
+            <?php endforeach; ?>
+        <?php endif; ?>
     </main>
 
     <script>
@@ -439,10 +536,35 @@ $pageTitle = "Archived Theses List";
             }
         }
         
+        // Search functionality
+        const searchInput = document.getElementById('searchInput');
+        if (searchInput) {
+            searchInput.addEventListener('input', function() {
+                const term = this.value.toLowerCase();
+                document.querySelectorAll('.theses-table tbody tr').forEach(row => {
+                    const text = row.textContent.toLowerCase();
+                    row.style.display = text.includes(term) ? '' : 'none';
+                });
+                
+                // Update department counts visibility
+                document.querySelectorAll('.dept-archive-section').forEach(section => {
+                    const visibleRows = section.querySelectorAll('.theses-table tbody tr:not([style*="display: none"])').length;
+                    const header = section.querySelector('.dept-archive-header');
+                    if (visibleRows === 0) {
+                        section.style.display = 'none';
+                    } else {
+                        section.style.display = 'block';
+                        const badge = header.querySelector('.badge');
+                        if (badge) badge.textContent = visibleRows + ' theses';
+                    }
+                });
+            });
+        }
+        
         document.addEventListener('DOMContentLoaded', function() {
             initDarkMode();
             initNotifications();
-            console.log("Archived List Page Loaded - Total Archived: <?= count($archived_theses) ?>");
+            console.log("Archived List Page Loaded - Grouped by Department");
         });
     </script>
 </body>

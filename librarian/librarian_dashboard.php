@@ -34,81 +34,31 @@ if ($user_data) {
 
 $librarian_since = date('F Y');
 
-// CREATE NOTIFICATIONS TABLE IF NOT EXISTS - USING 'is_read'
-$conn->query("CREATE TABLE IF NOT EXISTS notifications (
-    notification_id INT AUTO_INCREMENT PRIMARY KEY,
-    user_id INT NOT NULL,
-    thesis_id INT NULL,
-    message TEXT NOT NULL,
-    type VARCHAR(50) DEFAULT 'info',
-    link VARCHAR(255) NULL,
-    is_read TINYINT DEFAULT 0,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    INDEX (user_id),
-    INDEX (is_read)
-)");
+// GET FILTERS FROM URL
+$selected_department = isset($_GET['department']) ? $_GET['department'] : '';
+$selected_year = isset($_GET['year']) ? $_GET['year'] : '';
+$selected_sort = isset($_GET['sort']) ? $_GET['sort'] : 'date_desc';
 
-// GET NOTIFICATION COUNT
-$notificationCount = 0;
-$notif_check = $conn->query("SHOW TABLES LIKE 'notifications'");
-if ($notif_check && $notif_check->num_rows) {
-    $n = $conn->prepare("SELECT COUNT(*) as c FROM notifications WHERE user_id = ? AND is_read = 0");
-    $n->bind_param("i", $user_id);
-    $n->execute();
-    $result = $n->get_result();
-    if ($row = $result->fetch_assoc()) {
-        $notificationCount = $row['c'];
-    }
-    $n->close();
-}
+// Department list - fixed to only 5 departments
+$departments = ['BSIT', 'BSCRIM', 'BSHTM', 'BSED', 'BSBA'];
 
-// GET RECENT NOTIFICATIONS
-$recentNotifications = [];
-$notif_list = $conn->prepare("SELECT notification_id, user_id, thesis_id, message, is_read, created_at, link FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 5");
-$notif_list->bind_param("i", $user_id);
-$notif_list->execute();
-$notif_result = $notif_list->get_result();
-while ($row = $notif_result->fetch_assoc()) {
-    if ($row['thesis_id']) {
-        $thesis_q = $conn->prepare("SELECT title FROM thesis_table WHERE thesis_id = ?");
-        $thesis_q->bind_param("i", $row['thesis_id']);
-        $thesis_q->execute();
-        $thesis_title = $thesis_q->get_result()->fetch_assoc();
-        $row['thesis_title'] = $thesis_title['title'] ?? 'Unknown';
-        $thesis_q->close();
-    }
-    $recentNotifications[] = $row;
-}
-$notif_list->close();
+// Department colors
+$dept_colors = [
+    'BSIT' => '#3b82f6',
+    'BSCRIM' => '#10b981',
+    'BSHTM' => '#f59e0b',
+    'BSED' => '#8b5cf6',
+    'BSBA' => '#ef4444'
+];
+$default_color = '#6b7280';
 
-// MARK NOTIFICATION AS READ
-if (isset($_POST['mark_read']) && isset($_POST['notif_id'])) {
-    $notif_id = intval($_POST['notif_id']);
-    $update = $conn->prepare("UPDATE notifications SET is_read = 1 WHERE notification_id = ? AND user_id = ?");
-    $update->bind_param("ii", $notif_id, $user_id);
-    $update->execute();
-    $update->close();
-    echo json_encode(['success' => true]);
-    exit;
-}
-
-// MARK ALL AS READ
-if (isset($_POST['mark_all_read'])) {
-    $update = $conn->prepare("UPDATE notifications SET is_read = 1 WHERE user_id = ?");
-    $update->bind_param("i", $user_id);
-    $update->execute();
-    $update->close();
-    echo json_encode(['success' => true]);
-    exit;
-}
-
-// ==================== FIXED: No 'status' column, using 'is_archived' ====================
 // GET PENDING FOR ARCHIVING (theses that are NOT archived - is_archived = 0)
 $pending_theses = [];
 $pending_query = "SELECT t.*, u.first_name, u.last_name, u.email 
                   FROM thesis_table t
                   JOIN user_table u ON t.student_id = u.user_id
                   WHERE (t.is_archived = 0 OR t.is_archived IS NULL)
+                  AND t.department IN ('BSIT', 'BSCRIM', 'BSHTM', 'BSED', 'BSBA')
                   ORDER BY t.date_submitted DESC";
 $pending_result = $conn->query($pending_query);
 if ($pending_result && $pending_result->num_rows > 0) {
@@ -117,42 +67,55 @@ if ($pending_result && $pending_result->num_rows > 0) {
     }
 }
 
-// GET ARCHIVED THESES (is_archived = 1)
-$archived_theses = [];
+// BUILD QUERY FOR ARCHIVED THESES WITH FILTERS
 $archived_query = "SELECT t.*, u.first_name, u.last_name, u.email 
                    FROM thesis_table t
                    JOIN user_table u ON t.student_id = u.user_id
                    WHERE t.is_archived = 1
-                   ORDER BY t.archived_date DESC";
+                   AND t.department IN ('BSIT', 'BSCRIM', 'BSHTM', 'BSED', 'BSBA')";
+
+if (!empty($selected_department)) {
+    $archived_query .= " AND t.department = '" . $conn->real_escape_string($selected_department) . "'";
+}
+
+if (!empty($selected_year)) {
+    $archived_query .= " AND YEAR(t.date_submitted) = '" . $conn->real_escape_string($selected_year) . "'";
+}
+
+switch ($selected_sort) {
+    case 'date_asc':
+        $archived_query .= " ORDER BY t.archived_date ASC";
+        break;
+    case 'title_asc':
+        $archived_query .= " ORDER BY t.title ASC";
+        break;
+    case 'title_desc':
+        $archived_query .= " ORDER BY t.title DESC";
+        break;
+    default:
+        $archived_query .= " ORDER BY t.archived_date DESC";
+        break;
+}
+
 $archived_result = $conn->query($archived_query);
+$archived_theses = [];
 if ($archived_result && $archived_result->num_rows > 0) {
     while ($row = $archived_result->fetch_assoc()) {
         $archived_theses[] = $row;
     }
 }
 
-// GET MONTHLY ARCHIVED DATA FOR GRAPH
-$monthly_data = array_fill(0, 12, 0);
-$months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
-$monthly_query = "SELECT MONTH(archived_date) as month, COUNT(*) as count 
-                  FROM thesis_table 
-                  WHERE is_archived = 1 AND YEAR(archived_date) = YEAR(CURDATE())
-                  GROUP BY MONTH(archived_date)";
-$monthly_result = $conn->query($monthly_query);
-if ($monthly_result && $monthly_result->num_rows > 0) {
-    while ($row = $monthly_result->fetch_assoc()) {
-        $monthly_data[$row['month'] - 1] = $row['count'];
-    }
-}
-
-// GET DEPARTMENT STATS FOR PIE CHART (archived only)
-$dept_stats = [];
-$dept_query = "SELECT department, COUNT(*) as count FROM thesis_table WHERE is_archived = 1 GROUP BY department ORDER BY count DESC";
-$dept_result = $conn->query($dept_query);
-if ($dept_result && $dept_result->num_rows > 0) {
-    while ($row = $dept_result->fetch_assoc()) {
-        $dept_stats[] = ['department' => $row['department'], 'count' => $row['count']];
+// GET UNIQUE YEARS FOR FILTER
+$years = [];
+$year_query = "SELECT DISTINCT YEAR(date_submitted) as year 
+               FROM thesis_table 
+               WHERE date_submitted IS NOT NULL 
+               AND department IN ('BSIT', 'BSCRIM', 'BSHTM', 'BSED', 'BSBA')
+               ORDER BY year DESC";
+$year_result = $conn->query($year_query);
+if ($year_result && $year_result->num_rows > 0) {
+    while ($row = $year_result->fetch_assoc()) {
+        $years[] = $row['year'];
     }
 }
 
@@ -172,7 +135,6 @@ $pageTitle = "Librarian Dashboard";
     <title><?= htmlspecialchars($pageTitle) ?> | Thesis Management System</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: 'Inter', sans-serif; background: #fef2f2; color: #1f2937; overflow-x: hidden; }
@@ -192,35 +154,6 @@ $pageTitle = "Librarian Dashboard";
         .hamburger:hover { background: #fee2e2; }
         .logo { font-size: 1.3rem; font-weight: 700; color: #991b1b; }
         .logo span { color: #dc2626; }
-        .search-area { display: flex; align-items: center; background: #fef2f2; padding: 8px 16px; border-radius: 40px; gap: 10px; }
-        .search-area i { color: #dc2626; }
-        .search-area input { border: none; background: none; outline: none; font-size: 0.85rem; width: 200px; }
-        
-        .nav-right { display: flex; align-items: center; gap: 20px; position: relative; }
-        
-        .notification-container { position: relative; }
-        .notification-icon { position: relative; cursor: pointer; width: 40px; height: 40px; background: #fef2f2; border-radius: 50%; display: flex; align-items: center; justify-content: center; transition: background 0.2s; }
-        .notification-icon:hover { background: #fee2e2; }
-        .notification-icon i { font-size: 1.2rem; color: #dc2626; }
-        .notification-badge { position: absolute; top: -5px; right: -5px; background: #ef4444; color: white; font-size: 0.6rem; font-weight: 600; min-width: 18px; height: 18px; border-radius: 10px; display: flex; align-items: center; justify-content: center; padding: 0 5px; }
-        
-        .notification-dropdown { position: absolute; top: 55px; right: 0; width: 380px; background: white; border-radius: 16px; box-shadow: 0 10px 30px rgba(0,0,0,0.15); display: none; overflow: hidden; z-index: 1000; border: 1px solid #ffcdd2; animation: fadeSlideDown 0.2s ease; }
-        .notification-dropdown.show { display: block; }
-        @keyframes fadeSlideDown { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
-        .notification-header { padding: 16px 20px; border-bottom: 1px solid #fee2e2; display: flex; justify-content: space-between; align-items: center; }
-        .notification-header h3 { font-size: 1rem; font-weight: 600; color: #991b1b; margin: 0; }
-        .mark-all-read { font-size: 0.7rem; color: #dc2626; cursor: pointer; background: none; border: none; }
-        .notification-list { max-height: 400px; overflow-y: auto; }
-        .notification-item { display: flex; gap: 12px; padding: 14px 20px; border-bottom: 1px solid #fef2f2; cursor: pointer; transition: background 0.2s; text-decoration: none; color: inherit; }
-        .notification-item:hover { background: #fef2f2; }
-        .notification-item.unread { background: #fff5f5; border-left: 3px solid #dc2626; }
-        .notification-item.empty { justify-content: center; color: #9ca3af; cursor: default; }
-        .notif-icon { width: 36px; height: 36px; background: #fef2f2; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #dc2626; flex-shrink: 0; }
-        .notif-content { flex: 1; }
-        .notif-message { font-size: 0.8rem; color: #1f2937; margin-bottom: 4px; line-height: 1.4; }
-        .notif-time { font-size: 0.65rem; color: #9ca3af; }
-        .notification-footer { padding: 12px 20px; border-top: 1px solid #fee2e2; text-align: center; }
-        .notification-footer a { color: #dc2626; text-decoration: none; font-size: 0.8rem; }
         
         .profile-wrapper { position: relative; }
         .profile-trigger { display: flex; align-items: center; gap: 12px; cursor: pointer; padding: 5px 10px; border-radius: 40px; }
@@ -233,7 +166,7 @@ $pageTitle = "Librarian Dashboard";
         .profile-dropdown a:hover { background: #fef2f2; color: #dc2626; }
         .profile-dropdown hr { margin: 5px 0; border-color: #ffcdd2; }
         
-        .sidebar { position: fixed; top: 0; left: -300px; width: 280px; height: 100%; background: linear-gradient(180deg, #991b1b 0%, #dc2626 100%); display: flex; flex-direction: column; z-index: 1000; transition: left 0.3s ease; box-shadow: 2px 0 10px rgba(0,0,0,0.05); }
+        .sidebar { position: fixed; top: 0; left: -300px; width: 280px; height: 100%; background: linear-gradient(180deg, #991b1b 0%, #dc2626 100%); display: flex; flex-direction: column; z-index: 1000; transition: left 0.3s ease; }
         .sidebar.open { left: 0; }
         .logo-container { padding: 28px 24px; border-bottom: 1px solid rgba(255,255,255,0.15); }
         .logo-container .logo { color: white; }
@@ -245,13 +178,8 @@ $pageTitle = "Librarian Dashboard";
         .nav-item:hover { background: rgba(255,255,255,0.15); color: white; transform: translateX(5px); }
         .nav-item.active { background: rgba(255,255,255,0.2); color: white; }
         .nav-footer { padding: 20px 16px; border-top: 1px solid rgba(255,255,255,0.15); }
-        .theme-toggle { margin-bottom: 12px; }
-        .theme-toggle input { display: none; }
-        .toggle-label { display: flex; align-items: center; gap: 12px; cursor: pointer; }
-        .toggle-label i { font-size: 1rem; color: #fecaca; }
         .logout-btn { display: flex; align-items: center; gap: 12px; padding: 10px 12px; text-decoration: none; color: #fecaca; border-radius: 10px; }
         .logout-btn:hover { background: rgba(255,255,255,0.15); color: white; }
-        
         .sidebar-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.4); z-index: 999; display: none; }
         .sidebar-overlay.show { display: block; }
         
@@ -266,40 +194,143 @@ $pageTitle = "Librarian Dashboard";
         
         .stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; margin-bottom: 32px; }
         .stat-card { background: white; border-radius: 20px; padding: 24px; display: flex; align-items: center; gap: 18px; border: 1px solid #ffcdd2; transition: all 0.3s; }
-        .stat-card:hover { transform: translateY(-3px); box-shadow: 0 10px 25px rgba(220, 38, 38, 0.1); }
         .stat-icon { width: 55px; height: 55px; background: #fef2f2; border-radius: 16px; display: flex; align-items: center; justify-content: center; font-size: 1.5rem; color: #dc2626; }
         .stat-details h3 { font-size: 1.8rem; font-weight: 700; color: #991b1b; margin-bottom: 5px; }
         .stat-details p { font-size: 0.8rem; color: #6b7280; }
         
-        .charts-row { display: grid; grid-template-columns: repeat(2, 1fr); gap: 28px; margin-bottom: 32px; }
-        .chart-card { background: white; border-radius: 24px; padding: 24px; border: 1px solid #ffcdd2; transition: all 0.2s; display: flex; flex-direction: column; text-align: center; }
-        .chart-card:hover { transform: translateY(-3px); box-shadow: 0 8px 25px rgba(0,0,0,0.08); }
-        .chart-card h3 { font-size: 1rem; font-weight: 600; color: #991b1b; margin-bottom: 20px; display: flex; align-items: center; justify-content: center; gap: 8px; text-align: center; }
-        .chart-container { height: 280px; position: relative; width: 100%; min-height: 250px; display: flex; justify-content: center; align-items: center; }
-        .chart-container canvas { max-width: 100%; max-height: 100%; margin: 0 auto; display: block; }
-        
+        /* Pending Theses by Department Styles */
         .pending-card { background: white; border-radius: 24px; padding: 24px; margin-bottom: 32px; border: 1px solid #ffcdd2; }
         .pending-card h3 { font-size: 1rem; font-weight: 600; color: #991b1b; margin-bottom: 20px; display: flex; align-items: center; gap: 8px; }
-        .pending-list { display: flex; flex-direction: column; gap: 12px; }
-        .pending-item { display: flex; justify-content: space-between; align-items: center; padding: 16px; background: #fef2f2; border-radius: 16px; border-left: 3px solid #dc2626; flex-wrap: wrap; gap: 12px; }
-        .pending-item:hover { background: #fee2e2; }
-        .pending-info { flex: 1; }
-        .pending-title { font-weight: 600; font-size: 0.9rem; color: #1f2937; margin-bottom: 5px; }
-        .pending-meta { font-size: 0.7rem; color: #6b7280; display: flex; gap: 15px; flex-wrap: wrap; }
-        .btn-archive { background: #10b981; color: white; padding: 8px 20px; border-radius: 20px; font-size: 0.75rem; font-weight: 500; transition: all 0.2s; border: none; cursor: pointer; }
-        .btn-archive:hover { background: #059669; transform: translateY(-2px); }
-        .btn-view { background: #dc2626; color: white; padding: 6px 16px; border-radius: 20px; text-decoration: none; font-size: 0.75rem; font-weight: 500; transition: all 0.2s; }
-        .btn-view:hover { background: #991b1b; transform: translateY(-2px); }
+        .pending-dept-section {
+            margin-bottom: 24px;
+            background: #fef2f2;
+            border-radius: 16px;
+            overflow: hidden;
+            border: 1px solid #fee2e2;
+        }
+        .pending-dept-header {
+            padding: 12px 20px;
+            background: #fee2e2;
+            border-bottom: 1px solid #fecaca;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .pending-dept-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+        .pending-dept-header h4 {
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: #1f2937;
+            margin: 0;
+        }
+        .pending-dept-badge {
+            background: #dc2626;
+            color: white;
+            padding: 2px 10px;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            font-weight: 500;
+            margin-left: 10px;
+        }
+        .pending-dept-list {
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .pending-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 14px 16px;
+            background: white;
+            border-radius: 12px;
+            border: 1px solid #fee2e2;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+        .pending-item:hover {
+            background: #fff5f5;
+            transform: translateX(3px);
+        }
+        .pending-info {
+            flex: 1;
+        }
+        .pending-title {
+            font-weight: 600;
+            font-size: 0.85rem;
+            color: #1f2937;
+            margin-bottom: 5px;
+        }
+        .pending-meta {
+            font-size: 0.7rem;
+            color: #6b7280;
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+        .button-group {
+            display: flex;
+            gap: 8px;
+        }
+        .btn-view {
+            background: #3b82f6;
+            color: white;
+            padding: 6px 14px;
+            border-radius: 20px;
+            text-decoration: none;
+            font-size: 0.7rem;
+            font-weight: 500;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            border: none;
+            cursor: pointer;
+        }
+        .btn-view:hover {
+            background: #2563eb;
+            transform: translateY(-2px);
+        }
+        .btn-archive {
+            background: #10b981;
+            color: white;
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            font-weight: 500;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            border: none;
+            cursor: pointer;
+        }
+        .btn-archive:hover {
+            background: #059669;
+            transform: translateY(-2px);
+        }
         
+        /* Filter Bar */
+        .filter-bar { background: white; border-radius: 16px; padding: 20px; margin-bottom: 25px; border: 1px solid #ffcdd2; display: flex; flex-wrap: wrap; gap: 15px; align-items: center; }
+        .filter-select { padding: 10px 16px; border-radius: 40px; border: 1px solid #ffcdd2; background: #fef2f2; font-size: 0.85rem; cursor: pointer; min-width: 150px; }
+        .sort-select { padding: 10px 16px; border-radius: 40px; border: 1px solid #ffcdd2; background: #fef2f2; font-size: 0.85rem; cursor: pointer; min-width: 180px; }
+        .clear-btn { background: #fef2f2; color: #6b7280; border: 1px solid #ffcdd2; padding: 10px 20px; border-radius: 40px; cursor: pointer; font-weight: 500; text-decoration: none; display: inline-block; }
+        .clear-btn:hover { background: #fee2e2; }
+        
+        /* Archived Section */
         .archived-section { background: white; border-radius: 24px; padding: 24px; margin-bottom: 32px; border: 1px solid #ffcdd2; }
         .archived-section h3 { font-size: 1rem; font-weight: 600; color: #991b1b; margin-bottom: 20px; display: flex; align-items: center; gap: 8px; }
+        .archived-stats { font-size: 0.75rem; color: #6b7280; margin-left: 10px; }
         .table-responsive { overflow-x: auto; }
         .theses-table { width: 100%; border-collapse: collapse; }
         .theses-table th { text-align: left; padding: 12px; color: #6b7280; font-weight: 600; font-size: 0.7rem; text-transform: uppercase; border-bottom: 1px solid #ffcdd2; }
         .theses-table td { padding: 12px; border-bottom: 1px solid #fef2f2; font-size: 0.85rem; }
-        .status-badge { display: inline-block; padding: 4px 10px; border-radius: 30px; font-size: 0.7rem; font-weight: 500; }
-        .status-badge.archived { background: #d1ecf1; color: #0c5460; }
-        .status-badge.pending { background: #fef3c7; color: #d97706; }
+        .theses-table tr:hover td { background: #fef2f2; }
+        .status-badge { display: inline-block; padding: 4px 10px; border-radius: 30px; font-size: 0.7rem; font-weight: 500; background: #d1ecf1; color: #0c5460; }
         
         .empty-state { text-align: center; padding: 40px; color: #9ca3af; }
         .empty-state i { font-size: 3rem; margin-bottom: 12px; color: #dc2626; }
@@ -307,7 +338,7 @@ $pageTitle = "Librarian Dashboard";
         /* Modal Styles */
         .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1100; align-items: center; justify-content: center; }
         .modal.show { display: flex; }
-        .modal-content { background: white; border-radius: 24px; width: 500px; max-width: 90%; animation: slideUp 0.3s ease; }
+        .modal-content { background: white; border-radius: 24px; width: 500px; max-width: 90%; }
         .modal-header { padding: 20px 24px; border-bottom: 1px solid #fee2e2; display: flex; justify-content: space-between; align-items: center; }
         .modal-header h3 { font-size: 1.2rem; font-weight: 600; color: #991b1b; }
         .close-modal { font-size: 1.5rem; cursor: pointer; color: #9ca3af; }
@@ -316,34 +347,41 @@ $pageTitle = "Librarian Dashboard";
         .form-group { margin-bottom: 20px; }
         .form-group label { display: block; font-weight: 600; font-size: 0.85rem; margin-bottom: 8px; }
         .form-group select, .form-group textarea { width: 100%; padding: 12px; border: 1px solid #fee2e2; border-radius: 12px; font-size: 0.85rem; }
-        .form-group textarea { resize: vertical; font-family: inherit; }
         .modal-footer { padding: 20px 24px; border-top: 1px solid #fee2e2; display: flex; justify-content: flex-end; gap: 12px; }
         .btn-cancel { padding: 10px 20px; background: #fef2f2; color: #6b7280; border: none; border-radius: 10px; cursor: pointer; }
-        .btn-cancel:hover { background: #fee2e2; }
-        
-        @keyframes slideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+        .btn-confirm { background: #10b981; color: white; padding: 10px 20px; border: none; border-radius: 10px; cursor: pointer; font-weight: 600; }
+        .btn-confirm:hover { background: #059669; }
         
         @media (max-width: 768px) {
             .main-content { padding: 20px; }
             .stats-grid { grid-template-columns: 1fr; }
-            .charts-row { grid-template-columns: 1fr; gap: 20px; }
-            .search-area, .profile-name { display: none; }
+            .pending-item { flex-direction: column; align-items: flex-start; }
+            .button-group { width: 100%; justify-content: flex-start; }
             .librarian-banner { flex-direction: column; text-align: center; gap: 15px; }
             .librarian-details { text-align: center; }
-            .pending-item { flex-direction: column; align-items: flex-start; }
-            .notification-dropdown { width: 320px; right: -10px; }
-            .chart-container { height: 220px; }
+            .filter-bar { flex-direction: column; align-items: stretch; }
+            .filter-select, .sort-select, .clear-btn { width: 100%; }
+            .pending-dept-header { flex-wrap: wrap; }
         }
         
         body.dark-mode { background: #1a1a1a; }
-        body.dark-mode .top-nav, body.dark-mode .stat-card, body.dark-mode .chart-card, body.dark-mode .pending-card, body.dark-mode .archived-section, body.dark-mode .notification-dropdown, body.dark-mode .modal-content { background: #2d2d2d; border-color: #991b1b; }
-        body.dark-mode .stat-details h3, body.dark-mode .section-title, body.dark-mode .notification-header h3, body.dark-mode .pending-title, body.dark-mode .modal-header h3 { color: #fecaca; }
-        body.dark-mode .pending-meta, body.dark-mode .notif-message { color: #e5e7eb; }
-        body.dark-mode .notification-item:hover, body.dark-mode .pending-item:hover { background: #3d3d3d; }
-        body.dark-mode .notification-item.unread { background: #3a2a2a; }
-        body.dark-mode .empty-state { color: #9ca3af; }
-        body.dark-mode .chart-card h3 { color: #fecaca; }
+        body.dark-mode .top-nav, body.dark-mode .stat-card, body.dark-mode .pending-card, body.dark-mode .archived-section, body.dark-mode .modal-content, body.dark-mode .filter-bar { background: #2d2d2d; border-color: #991b1b; }
+        body.dark-mode .stat-details h3 { color: #fecaca; }
+        body.dark-mode .pending-dept-section { background: #3d3d3d; border-color: #991b1b; }
+        body.dark-mode .pending-dept-header { background: #4a4a4a; border-bottom-color: #991b1b; }
+        body.dark-mode .pending-dept-header h4 { color: #fecaca; }
+        body.dark-mode .pending-item { background: #2d2d2d; border-color: #991b1b; }
+        body.dark-mode .pending-title { color: #e5e7eb; }
+        body.dark-mode .pending-meta { color: #cbd5e1; }
+        body.dark-mode .pending-item:hover { background: #4a4a4a; }
+        body.dark-mode .profile-dropdown { background: #2d2d2d; }
+        body.dark-mode .profile-dropdown a { color: #e5e7eb; }
         body.dark-mode .form-group select, body.dark-mode .form-group textarea { background: #3d3d3d; border-color: #991b1b; color: white; }
+        body.dark-mode .filter-select, body.dark-mode .sort-select { background: #3d3d3d; border-color: #991b1b; color: #e5e7eb; }
+        body.dark-mode .clear-btn { background: #3d3d3d; border-color: #991b1b; color: #e5e7eb; }
+        body.dark-mode .theses-table td { color: #e5e7eb; border-bottom-color: #3d3d3d; }
+        body.dark-mode .theses-table tr:hover td { background: #3d3d3d; }
+        body.dark-mode .status-badge { background: #1e3a5f; color: #60a5fa; }
     </style>
 </head>
 <body>
@@ -353,41 +391,8 @@ $pageTitle = "Librarian Dashboard";
         <div class="nav-left">
             <button class="hamburger" id="hamburgerBtn"><span></span><span></span><span></span></button>
             <div class="logo">Thesis<span>Manager</span></div>
-            <div class="search-area"><i class="fas fa-search"></i><input type="text" id="searchInput" placeholder="Search..."></div>
         </div>
         <div class="nav-right">
-            <div class="notification-container">
-                <div class="notification-icon" id="notificationIcon">
-                    <i class="far fa-bell"></i>
-                    <?php if ($notificationCount > 0): ?>
-                        <span class="notification-badge" id="notificationBadge"><?= $notificationCount ?></span>
-                    <?php endif; ?>
-                </div>
-                <div class="notification-dropdown" id="notificationDropdown">
-                    <div class="notification-header">
-                        <h3>Notifications</h3>
-                        <?php if ($notificationCount > 0): ?>
-                            <button class="mark-all-read" id="markAllReadBtn">Mark all as read</button>
-                        <?php endif; ?>
-                    </div>
-                    <div class="notification-list" id="notificationList">
-                        <?php if (empty($recentNotifications)): ?>
-                            <div class="notification-item empty"><div class="notif-icon"><i class="far fa-bell-slash"></i></div><div class="notif-content"><div class="notif-message">No notifications yet</div></div></div>
-                        <?php else: ?>
-                            <?php foreach ($recentNotifications as $notif): ?>
-                                <a href="<?= $notif['link'] ?? 'view_thesis.php?id=' . $notif['thesis_id'] ?>" class="notification-item <?= $notif['is_read'] == 0 ? 'unread' : '' ?>" data-id="<?= $notif['notification_id'] ?>">
-                                    <div class="notif-icon"><i class="fas fa-bell"></i></div>
-                                    <div class="notif-content">
-                                        <div class="notif-message"><?= htmlspecialchars($notif['message']) ?></div>
-                                        <div class="notif-time"><i class="far fa-clock"></i> <?php echo date('M d, Y h:i A', strtotime($notif['created_at'])); ?></div>
-                                    </div>
-                                </a>
-                            <?php endforeach; ?>
-                        <?php endif; ?>
-                    </div>
-                    <div class="notification-footer"><a href="notifications.php">View all notifications <i class="fas fa-arrow-right"></i></a></div>
-                </div>
-            </div>
             <div class="profile-wrapper" id="profileWrapper">
                 <div class="profile-trigger">
                     <span class="profile-name"><?= htmlspecialchars($fullName) ?></span>
@@ -395,7 +400,6 @@ $pageTitle = "Librarian Dashboard";
                 </div>
                 <div class="profile-dropdown" id="profileDropdown">
                     <a href="librarian_profile.php"><i class="fas fa-user"></i> Profile</a>
-                    <a href="#"><i class="fas fa-cog"></i> Settings</a>
                     <hr>
                     <a href="/ArchivingThesis/authentication/logout.php"><i class="fas fa-sign-out-alt"></i> Logout</a>
                 </div>
@@ -410,7 +414,6 @@ $pageTitle = "Librarian Dashboard";
             <a href="archived_list.php" class="nav-item"><i class="fas fa-folder-open"></i><span>Archived List</span></a>
         </div>
         <div class="nav-footer">
-            <div class="theme-toggle"><input type="checkbox" id="darkmode"><label for="darkmode" class="toggle-label"><i class="fas fa-sun"></i><i class="fas fa-moon"></i></label></div>
             <a href="/ArchivingThesis/authentication/logout.php" class="logout-btn"><i class="fas fa-sign-out-alt"></i><span>Logout</span></a>
         </div>
     </aside>
@@ -433,66 +436,124 @@ $pageTitle = "Librarian Dashboard";
             <div class="stat-card"><div class="stat-icon"><i class="fas fa-book"></i></div><div class="stat-details"><h3><?= number_format($stats['total_archived']) ?></h3><p>Total Archived</p></div></div>
         </div>
 
-        <!-- CHARTS SECTION -->
-        <div class="charts-row">
-            <div class="chart-card">
-                <h3><i class="fas fa-chart-line"></i> Monthly Archived Theses</h3>
-                <div class="chart-container">
-                    <canvas id="monthlyChart"></canvas>
-                </div>
-            </div>
-            <div class="chart-card">
-                <h3><i class="fas fa-chart-pie"></i> Archived Theses by Department</h3>
-                <div class="chart-container">
-                    <canvas id="deptChart"></canvas>
-                </div>
-            </div>
-        </div>
-
-        <!-- PENDING FOR ARCHIVING SECTION -->
+        <!-- PENDING FOR ARCHIVING SECTION - GROUPED BY DEPARTMENT -->
         <div class="pending-card">
             <h3><i class="fas fa-clock"></i> Theses Pending for Archiving (<?= count($pending_theses) ?>)</h3>
             <?php if (empty($pending_theses)): ?>
                 <div class="empty-state"><i class="fas fa-check-circle"></i><p>No pending theses for archiving</p></div>
-            <?php else: ?>
-                <div class="pending-list">
-                    <?php foreach ($pending_theses as $thesis): ?>
-                    <div class="pending-item">
-                        <div class="pending-info">
-                            <div class="pending-title"><?= htmlspecialchars($thesis['title']) ?></div>
-                            <div class="pending-meta">
-                                <span><i class="fas fa-user"></i> <?= htmlspecialchars($thesis['first_name'] . ' ' . $thesis['last_name']) ?></span>
-                                <span><i class="fas fa-calendar"></i> <?= date('M d, Y', strtotime($thesis['date_submitted'])) ?></span>
+            <?php else: 
+                // Group pending theses by department
+                $pending_by_dept = [];
+                foreach ($pending_theses as $thesis) {
+                    $dept = $thesis['department'] ?? 'N/A';
+                    if (!isset($pending_by_dept[$dept])) {
+                        $pending_by_dept[$dept] = [];
+                    }
+                    $pending_by_dept[$dept][] = $thesis;
+                }
+                
+                // Sort departments
+                uksort($pending_by_dept, function($a, $b) use ($departments) {
+                    $pos_a = array_search($a, $departments);
+                    $pos_b = array_search($b, $departments);
+                    if ($pos_a === false) $pos_a = 999;
+                    if ($pos_b === false) $pos_b = 999;
+                    return $pos_a - $pos_b;
+                });
+            ?>
+                <?php foreach ($pending_by_dept as $dept => $theses): ?>
+                <div class="pending-dept-section">
+                    <div class="pending-dept-header">
+                        <span class="pending-dept-dot" style="background: <?= $dept_colors[$dept] ?? $default_color ?>;"></span>
+                        <h4><?= htmlspecialchars($dept) ?></h4>
+                        <span class="pending-dept-badge"><?= count($theses) ?> pending</span>
+                    </div>
+                    <div class="pending-dept-list">
+                        <?php foreach ($theses as $thesis): ?>
+                        <div class="pending-item">
+                            <div class="pending-info">
+                                <div class="pending-title"><?= htmlspecialchars($thesis['title']) ?></div>
+                                <div class="pending-meta">
+                                    <span><i class="fas fa-user"></i> <?= htmlspecialchars($thesis['first_name'] . ' ' . $thesis['last_name']) ?></span>
+                                    <span><i class="fas fa-calendar"></i> <?= date('M d, Y', strtotime($thesis['date_submitted'])) ?></span>
+                                </div>
+                            </div>
+                            <div class="button-group">
+                                <a href="view_thesis.php?id=<?= $thesis['thesis_id'] ?>" class="btn-view"><i class="fas fa-eye"></i> View</a>
+                                <button type="button" class="btn-archive" onclick="openArchiveModal(<?= $thesis['thesis_id'] ?>)"><i class="fas fa-archive"></i> Archive</button>
                             </div>
                         </div>
-                        <button class="btn-archive" onclick="openArchiveModal(<?= $thesis['thesis_id'] ?>)">
-                            <i class="fas fa-archive"></i> Archive Thesis
-                        </button>
+                        <?php endforeach; ?>
                     </div>
-                    <?php endforeach; ?>
                 </div>
+                <?php endforeach; ?>
             <?php endif; ?>
         </div>
 
-        <!-- RECENTLY ARCHIVED SECTION -->
+        <!-- FILTER BAR FOR ARCHIVED THESES -->
+        <div class="filter-bar">
+            <form method="GET" action="" style="display: flex; flex-wrap: wrap; gap: 15px; align-items: center; width: 100%;">
+                <select name="department" class="filter-select" onchange="this.form.submit()">
+                    <option value="">All Departments</option>
+                    <?php foreach ($departments as $dept): ?>
+                        <option value="<?= htmlspecialchars($dept) ?>" <?= $selected_department == $dept ? 'selected' : '' ?>><?= htmlspecialchars($dept) ?></option>
+                    <?php endforeach; ?>
+                </select>
+                
+                <select name="year" class="filter-select" onchange="this.form.submit()">
+                    <option value="">All Years</option>
+                    <?php foreach ($years as $year): ?>
+                        <option value="<?= $year ?>" <?= $selected_year == $year ? 'selected' : '' ?>><?= $year ?></option>
+                    <?php endforeach; ?>
+                </select>
+                
+                <select name="sort" class="sort-select" onchange="this.form.submit()">
+                    <option value="date_desc" <?= $selected_sort == 'date_desc' ? 'selected' : '' ?>>Latest First</option>
+                    <option value="date_asc" <?= $selected_sort == 'date_asc' ? 'selected' : '' ?>>Oldest First</option>
+                    <option value="title_asc" <?= $selected_sort == 'title_asc' ? 'selected' : '' ?>>Title A-Z</option>
+                    <option value="title_desc" <?= $selected_sort == 'title_desc' ? 'selected' : '' ?>>Title Z-A</option>
+                </select>
+                
+                <?php if (!empty($selected_department) || !empty($selected_year) || $selected_sort != 'date_desc'): ?>
+                    <a href="librarian_dashboard.php" class="clear-btn"><i class="fas fa-times"></i> Clear Filters</a>
+                <?php endif; ?>
+            </form>
+        </div>
+
+        <!-- ARCHIVED THESES SECTION -->
         <div class="archived-section">
-            <h3><i class="fas fa-archive"></i> Recently Archived Theses (<?= count($archived_theses) ?>)</h3>
+            <h3>
+                <i class="fas fa-archive"></i> Archived Theses 
+                <span class="archived-stats">(<?= count($archived_theses) ?> found)</span>
+            </h3>
             <?php if (empty($archived_theses)): ?>
-                <div class="empty-state"><i class="fas fa-archive"></i><p>No archived theses yet</p></div>
+                <div class="empty-state">
+                    <i class="fas fa-archive"></i>
+                    <p>No archived theses found</p>
+                    <?php if (!empty($selected_department) || !empty($selected_year)): ?>
+                        <p style="margin-top: 10px;"><a href="librarian_dashboard.php" style="color: #dc2626;">Clear filters</a> to see all archives</p>
+                    <?php endif; ?>
+                </div>
             <?php else: ?>
                 <div class="table-responsive">
                     <table class="theses-table">
                         <thead>
-                            <tr><th>Thesis Title</th><th>Author</th><th>Department</th><th>Archived Date</th><th>Status</th><th>Action</th></tr>
-                        </thead>
+                            <tr>
+                                <th>Thesis Title</th>
+                                <th>Author</th>
+                                <th>Department</th>
+                                <th>Archived Date</th>
+                                <th>Status</th>
+                                <th>Action</th>
+                            </thead>
                         <tbody>
-                            <?php foreach (array_slice($archived_theses, 0, 10) as $thesis): ?>
+                            <?php foreach ($archived_theses as $thesis): ?>
                             <tr>
                                 <td><strong><?= htmlspecialchars($thesis['title']) ?></strong></td>
-                                <td><?= htmlspecialchars($thesis['adviser'] ?? 'Unknown') ?></td>
+                                <td><?= htmlspecialchars($thesis['first_name'] . ' ' . $thesis['last_name']) ?></td>
                                 <td><?= htmlspecialchars($thesis['department'] ?? 'N/A') ?></td>
                                 <td><?= isset($thesis['archived_date']) ? date('M d, Y', strtotime($thesis['archived_date'])) : date('M d, Y', strtotime($thesis['date_submitted'])) ?></td>
-                                <td><span class="status-badge archived">Archived</span></td>
+                                <td><span class="status-badge"><i class="fas fa-check-circle"></i> Archived</span></td>
                                 <td><a href="view_thesis.php?id=<?= $thesis['thesis_id'] ?>" class="btn-view"><i class="fas fa-eye"></i> View</a></td>
                             </tr>
                             <?php endforeach; ?>
@@ -510,148 +571,89 @@ $pageTitle = "Librarian Dashboard";
                 <h3><i class="fas fa-archive"></i> Archive Thesis</h3>
                 <span class="close-modal" onclick="closeArchiveModal()">&times;</span>
             </div>
-            <form method="POST" action="librarian_archive.php" id="archiveForm">
-                <div class="modal-body">
-                    <input type="hidden" name="thesis_id" id="archive_thesis_id" value="">
-                    <div class="form-group">
-                        <label>Retention Period</label>
-                        <select name="retention_period">
-                            <option value="5">5 years</option>
-                            <option value="10">10 years</option>
-                            <option value="20">20 years</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label>Archive Notes</label>
-                        <textarea name="archive_notes" rows="3" placeholder="Optional notes about this archive..."></textarea>
-                    </div>
+            <div class="modal-body">
+                <input type="hidden" id="archive_thesis_id" value="">
+                <div class="form-group">
+                    <label>Retention Period</label>
+                    <select id="retention_period">
+                        <option value="5">5 years</option>
+                        <option value="10">10 years</option>
+                        <option value="20">20 years</option>
+                    </select>
                 </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn-cancel" onclick="closeArchiveModal()">Cancel</button>
-                    <button type="submit" name="archive_thesis" class="btn-archive">Confirm Archive</button>
+                <div class="form-group">
+                    <label>Archive Notes</label>
+                    <textarea id="archive_notes" rows="3" placeholder="Optional notes about this archive..."></textarea>
                 </div>
-            </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn-cancel" onclick="closeArchiveModal()">Cancel</button>
+                <button type="button" class="btn-confirm" onclick="confirmArchive()"><i class="fas fa-archive"></i> Confirm Archive</button>
+            </div>
         </div>
     </div>
 
     <script>
-        // Chart Data
-        const monthlyData = <?= json_encode($monthly_data) ?>;
-        const months = <?= json_encode($months) ?>;
-        const deptStats = <?= json_encode($dept_stats) ?>;
-        
-        // DOM Elements
         const hamburgerBtn = document.getElementById('hamburgerBtn');
         const sidebar = document.getElementById('sidebar');
         const sidebarOverlay = document.getElementById('sidebarOverlay');
         const profileWrapper = document.getElementById('profileWrapper');
         const profileDropdown = document.getElementById('profileDropdown');
-        const darkModeToggle = document.getElementById('darkmode');
-        const notificationIcon = document.getElementById('notificationIcon');
-        const notificationDropdown = document.getElementById('notificationDropdown');
-        const markAllReadBtn = document.getElementById('markAllReadBtn');
         const archiveModal = document.getElementById('archiveModal');
-        const archiveForm = document.getElementById('archiveForm');
 
-        // Sidebar Functions
-        function openSidebar() { sidebar.classList.add('open'); sidebarOverlay.classList.add('show'); document.body.style.overflow = 'hidden'; }
-        function closeSidebar() { sidebar.classList.remove('open'); sidebarOverlay.classList.remove('show'); document.body.style.overflow = ''; }
-        function toggleSidebar(e) { e.stopPropagation(); if (sidebar.classList.contains('open')) closeSidebar(); else openSidebar(); }
-        
-        if (hamburgerBtn) hamburgerBtn.addEventListener('click', toggleSidebar);
-        if (sidebarOverlay) sidebarOverlay.addEventListener('click', closeSidebar);
-        
-        document.addEventListener('keydown', function(e) { if (e.key === 'Escape') {
-            if (sidebar.classList.contains('open')) closeSidebar();
-            if (profileDropdown.classList.contains('show')) profileDropdown.classList.remove('show');
-            if (notificationDropdown.classList.contains('show')) notificationDropdown.classList.remove('show');
-            if (archiveModal && archiveModal.classList.contains('show')) closeArchiveModal();
-        }});
-        
-        window.addEventListener('resize', function() { if (window.innerWidth > 768 && sidebar.classList.contains('open')) closeSidebar(); });
-        
-        // Profile Dropdown
-        function toggleProfileDropdown(e) { e.stopPropagation(); profileDropdown.classList.toggle('show'); if (notificationDropdown.classList.contains('show')) notificationDropdown.classList.remove('show'); }
-        function closeProfileDropdown(e) { if (!profileWrapper.contains(e.target)) profileDropdown.classList.remove('show'); }
-        if (profileWrapper) { profileWrapper.addEventListener('click', toggleProfileDropdown); document.addEventListener('click', closeProfileDropdown); }
-        
-        // Notification Dropdown
-        function toggleNotificationDropdown(e) { e.stopPropagation(); notificationDropdown.classList.toggle('show'); if (profileDropdown.classList.contains('show')) profileDropdown.classList.remove('show'); }
-        function closeNotificationDropdown(e) { if (!notificationIcon.contains(e.target) && !notificationDropdown.contains(e.target)) notificationDropdown.classList.remove('show'); }
-        if (notificationIcon) { notificationIcon.addEventListener('click', toggleNotificationDropdown); document.addEventListener('click', closeNotificationDropdown); }
-        
-        // Notification Functions
-        function markNotificationAsRead(notifId, element) {
-            fetch(window.location.href, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: 'mark_read=1&notif_id=' + notifId
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    element.classList.remove('unread');
-                    const badge = document.getElementById('notificationBadge');
-                    if (badge) {
-                        let c = parseInt(badge.textContent);
-                        if (c > 0) { c--; if (c === 0) badge.style.display = 'none'; else badge.textContent = c; }
-                    }
-                }
-            })
-            .catch(error => console.error('Error:', error));
+        function openSidebar() { 
+            sidebar.classList.add('open'); 
+            sidebarOverlay.classList.add('show'); 
+            document.body.style.overflow = 'hidden'; 
         }
         
-        function markAllAsRead() {
-            fetch(window.location.href, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: 'mark_all_read=1'
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    document.querySelectorAll('.notification-item.unread').forEach(item => item.classList.remove('unread'));
-                    const badge = document.getElementById('notificationBadge');
-                    if (badge) badge.style.display = 'none';
-                    if (markAllReadBtn) markAllReadBtn.style.display = 'none';
-                }
-            })
-            .catch(error => console.error('Error:', error));
+        function closeSidebar() { 
+            sidebar.classList.remove('open'); 
+            sidebarOverlay.classList.remove('show'); 
+            document.body.style.overflow = ''; 
         }
         
-        function initNotifications() {
-            document.querySelectorAll('.notification-item').forEach(item => {
-                if (!item.classList.contains('empty')) {
-                    item.addEventListener('click', function(e) {
-                        if (e.target.closest('.notification-footer')) return;
-                        const id = this.dataset.id;
-                        if (id && this.classList.contains('unread')) markNotificationAsRead(id, this);
-                    });
-                }
-            });
-            if (markAllReadBtn) markAllReadBtn.addEventListener('click', function(e) { e.stopPropagation(); markAllAsRead(); });
-        }
-        
-        // Dark Mode
-        function initDarkMode() {
-            const isDark = localStorage.getItem('darkMode') === 'true';
-            if (isDark) { document.body.classList.add('dark-mode'); if (darkModeToggle) darkModeToggle.checked = true; }
-            if (darkModeToggle) {
-                darkModeToggle.addEventListener('change', function() {
-                    if (this.checked) { document.body.classList.add('dark-mode'); localStorage.setItem('darkMode', 'true'); }
-                    else { document.body.classList.remove('dark-mode'); localStorage.setItem('darkMode', 'false'); }
-                });
+        function toggleSidebar(e) { 
+            e.stopPropagation(); 
+            if (sidebar.classList.contains('open')) {
+                closeSidebar(); 
+            } else { 
+                openSidebar(); 
             }
         }
         
-        // Archive Modal Functions
+        if (hamburgerBtn) {
+            hamburgerBtn.addEventListener('click', toggleSidebar);
+        }
+        
+        if (sidebarOverlay) {
+            sidebarOverlay.addEventListener('click', closeSidebar);
+        }
+        
+        function toggleProfileDropdown(e) { 
+            e.stopPropagation(); 
+            profileDropdown.classList.toggle('show'); 
+        }
+        
+        function closeProfileDropdown(e) { 
+            if (!profileWrapper.contains(e.target)) {
+                profileDropdown.classList.remove('show');
+            } 
+        }
+        
+        if (profileWrapper) { 
+            profileWrapper.addEventListener('click', toggleProfileDropdown); 
+            document.addEventListener('click', closeProfileDropdown); 
+        }
+        
         function openArchiveModal(id) {
-            console.log("Opening archive modal for thesis ID: " + id);
             if (!id || id === '' || id === 'undefined') {
                 alert('Error: Invalid thesis ID!');
                 return;
             }
             document.getElementById('archive_thesis_id').value = id;
+            document.getElementById('retention_period').value = '5';
+            document.getElementById('archive_notes').value = '';
             if (archiveModal) {
                 archiveModal.style.display = 'flex';
                 archiveModal.classList.add('show');
@@ -666,182 +668,60 @@ $pageTitle = "Librarian Dashboard";
             }
         }
         
-        // Handle form submission with AJAX
-        if (archiveForm) {
-            archiveForm.addEventListener('submit', function(e) {
-                e.preventDefault();
-                
-                const thesisId = document.getElementById('archive_thesis_id').value;
-                
-                console.log("Submitting archive for thesis ID: " + thesisId);
-                
-                if (!thesisId || thesisId === '' || thesisId === '0') {
-                    alert('Error: Thesis ID is missing! Please refresh the page and try again.');
-                    return;
+        function confirmArchive() {
+            const thesisId = document.getElementById('archive_thesis_id').value;
+            const retentionPeriod = document.getElementById('retention_period').value;
+            const archiveNotes = document.getElementById('archive_notes').value;
+            
+            if (!thesisId || thesisId === '' || thesisId === '0') {
+                alert('Error: Invalid thesis ID!');
+                return;
+            }
+            
+            const confirmBtn = event.target;
+            const originalText = confirmBtn.innerHTML;
+            confirmBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Archiving...';
+            confirmBtn.disabled = true;
+            
+            const formData = new FormData();
+            formData.append('thesis_id', thesisId);
+            formData.append('retention_period', retentionPeriod);
+            formData.append('archive_notes', archiveNotes);
+            
+            fetch('librarian_archive.php', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert('✅ ' + data.message);
+                    location.reload();
+                } else {
+                    alert('❌ Error: ' + data.message);
+                    confirmBtn.innerHTML = originalText;
+                    confirmBtn.disabled = false;
                 }
-                
-                const formData = new FormData(this);
-                
-                // Show loading state
-                const submitBtn = this.querySelector('button[type="submit"]');
-                const originalText = submitBtn.innerHTML;
-                submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Archiving...';
-                submitBtn.disabled = true;
-                
-                fetch('librarian_archive.php', {
-                    method: 'POST',
-                    body: formData
-                })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.success) {
-                        alert('✅ ' + data.message);
-                        location.reload();
-                    } else {
-                        alert('❌ Error: ' + data.message);
-                        submitBtn.innerHTML = originalText;
-                        submitBtn.disabled = false;
-                    }
-                })
-                .catch(error => {
-                    console.error('Error:', error);
-                    alert('Network error. Please try again.');
-                    submitBtn.innerHTML = originalText;
-                    submitBtn.disabled = false;
-                });
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Network error. Please try again.');
+                confirmBtn.innerHTML = originalText;
+                confirmBtn.disabled = false;
             });
         }
         
-        // Initialize Charts
-        function initCharts() {
-            // Monthly Line Chart
-            const monthlyCtx = document.getElementById('monthlyChart');
-            if (monthlyCtx) {
-                const maxValue = Math.max(...monthlyData, 1);
-                const yAxisMax = Math.ceil(maxValue * 1.2);
-                
-                new Chart(monthlyCtx, {
-                    type: 'line',
-                    data: {
-                        labels: months,
-                        datasets: [{
-                            label: 'Archived Theses',
-                            data: monthlyData,
-                            borderColor: '#dc2626',
-                            backgroundColor: 'rgba(220, 38, 38, 0.05)',
-                            borderWidth: 3,
-                            pointBackgroundColor: '#dc2626',
-                            pointBorderColor: '#ffffff',
-                            pointBorderWidth: 2,
-                            pointRadius: 5,
-                            pointHoverRadius: 8,
-                            fill: true,
-                            tension: 0.3
-                        }]
-                    },
-                    options: {
-                        responsive: true,
-                        maintainAspectRatio: true,
-                        plugins: {
-                            legend: { display: false },
-                            tooltip: {
-                                callbacks: {
-                                    label: function(ctx) { return `Archived: ${ctx.raw}`; }
-                                },
-                                backgroundColor: '#1f2937',
-                                titleColor: '#fef2f2',
-                                bodyColor: '#fef2f2',
-                                padding: 10,
-                                cornerRadius: 8
-                            }
-                        },
-                        scales: {
-                            y: {
-                                beginAtZero: true,
-                                max: yAxisMax,
-                                grid: { color: '#fee2e2', borderDash: [5, 5] },
-                                ticks: { stepSize: 1, precision: 0, color: '#6b7280' }
-                            },
-                            x: {
-                                grid: { display: false },
-                                ticks: { color: '#6b7280', maxRotation: 45 }
-                            }
-                        }
-                    }
-                });
-            }
-            
-            // Department Pie Chart
-            const deptCtx = document.getElementById('deptChart');
-            if (deptCtx) {
-                if (deptStats.length > 0) {
-                    const deptLabels = deptStats.map(item => item.department);
-                    const deptCounts = deptStats.map(item => item.count);
-                    const colors = ['#dc2626', '#10b981', '#3b82f6', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
-                    
-                    new Chart(deptCtx, {
-                        type: 'doughnut',
-                        data: {
-                            labels: deptLabels,
-                            datasets: [{
-                                data: deptCounts,
-                                backgroundColor: colors,
-                                borderWidth: 0,
-                                cutout: '60%',
-                                hoverOffset: 10,
-                                borderRadius: 8
-                            }]
-                        },
-                        options: {
-                            responsive: true,
-                            maintainAspectRatio: true,
-                            plugins: {
-                                legend: {
-                                    position: 'bottom',
-                                    labels: { font: { size: 10 }, boxWidth: 10, padding: 8 }
-                                },
-                                tooltip: {
-                                    callbacks: {
-                                        label: function(ctx) {
-                                            const val = ctx.raw || 0;
-                                            const total = ctx.dataset.data.reduce((a, b) => a + b, 0);
-                                            const pct = total > 0 ? Math.round((val / total) * 100) : 0;
-                                            return `${ctx.label}: ${val} (${pct}%)`;
-                                        }
-                                    },
-                                    backgroundColor: '#1f2937',
-                                    titleColor: '#fef2f2',
-                                    bodyColor: '#fef2f2',
-                                    padding: 10,
-                                    cornerRadius: 8
-                                }
-                            },
-                            layout: { padding: { top: 10, bottom: 10, left: 10, right: 10 } }
-                        }
-                    });
-                } else {
-                    new Chart(deptCtx, {
-                        type: 'doughnut',
-                        data: { labels: ['No Data'], datasets: [{ data: [1], backgroundColor: ['#e5e7eb'] }] },
-                        options: { responsive: true, maintainAspectRatio: true, plugins: { legend: { position: 'bottom' } } }
-                    });
-                }
-            }
-        }
-        
-        // Close modal when clicking outside
         window.onclick = function(event) {
             if (event.target === archiveModal) {
                 closeArchiveModal();
             }
         }
         
-        document.addEventListener('DOMContentLoaded', function() {
-            initDarkMode();
-            initNotifications();
-            initCharts();
-            console.log("Librarian Dashboard Loaded");
-        });
+        // Dark mode
+        const isDark = localStorage.getItem('darkMode') === 'true';
+        if (isDark) {
+            document.body.classList.add('dark-mode');
+        }
     </script>
 </body>
 </html>

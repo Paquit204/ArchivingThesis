@@ -55,6 +55,15 @@ function logAdminAction($conn, $user_id, $action, $table, $record_id, $descripti
     $log_stmt->close();
 }
 
+// Department list
+$departments = [
+    'BSIT' => 'BS Information Technology (BSIT)',
+    'BSCRIM' => 'BS Criminology (BSCRIM)',
+    'BSHTM' => 'BS Hospitality Management (BSHTM)',
+    'BSED' => 'BS Education (BSED)',
+    'BSBA' => 'BS Business Administration (BSBA)'
+];
+
 // ==================== PROCESS FORM SUBMISSIONS ====================
 $message = '';
 $message_type = '';
@@ -68,6 +77,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action']) && $_POST['a
     $password = password_hash($_POST['password'], PASSWORD_DEFAULT);
     $role_id = $_POST['role_id'];
     $status = $_POST['status'];
+    $department = isset($_POST['department']) && !empty($_POST['department']) ? $_POST['department'] : NULL;
     
     $check = $conn->prepare("SELECT user_id FROM user_table WHERE username = ? OR email = ?");
     $check->bind_param("ss", $username, $email);
@@ -78,8 +88,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action']) && $_POST['a
         $message = "Username or email already exists!";
         $message_type = "error";
     } else {
-        $stmt = $conn->prepare("INSERT INTO user_table (first_name, last_name, email, username, password, role_id, status) VALUES (?, ?, ?, ?, ?, ?, ?)");
-        $stmt->bind_param("sssssis", $first_name, $last_name, $email, $username, $password, $role_id, $status);
+        $stmt = $conn->prepare("INSERT INTO user_table (first_name, last_name, email, username, password, role_id, department, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+        $stmt->bind_param("ssssssss", $first_name, $last_name, $email, $username, $password, $role_id, $department, $status);
         
         if ($stmt->execute()) {
             $new_id = $stmt->insert_id;
@@ -104,6 +114,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action']) && $_POST['a
     $username = trim($_POST['username']);
     $role_id = $_POST['role_id'];
     $status = $_POST['status'];
+    $department = isset($_POST['department']) && !empty($_POST['department']) ? $_POST['department'] : NULL;
     
     $check = $conn->prepare("SELECT user_id FROM user_table WHERE (username = ? OR email = ?) AND user_id != ?");
     $check->bind_param("ssi", $username, $email, $user_id_edit);
@@ -116,11 +127,11 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action']) && $_POST['a
     } else {
         if (!empty($_POST['password'])) {
             $password = password_hash($_POST['password'], PASSWORD_DEFAULT);
-            $stmt = $conn->prepare("UPDATE user_table SET first_name=?, last_name=?, email=?, username=?, password=?, role_id=?, status=? WHERE user_id=?");
-            $stmt->bind_param("sssssisi", $first_name, $last_name, $email, $username, $password, $role_id, $status, $user_id_edit);
+            $stmt = $conn->prepare("UPDATE user_table SET first_name=?, last_name=?, email=?, username=?, password=?, role_id=?, department=?, status=? WHERE user_id=?");
+            $stmt->bind_param("ssssssssi", $first_name, $last_name, $email, $username, $password, $role_id, $department, $status, $user_id_edit);
         } else {
-            $stmt = $conn->prepare("UPDATE user_table SET first_name=?, last_name=?, email=?, username=?, role_id=?, status=? WHERE user_id=?");
-            $stmt->bind_param("ssssisi", $first_name, $last_name, $email, $username, $role_id, $status, $user_id_edit);
+            $stmt = $conn->prepare("UPDATE user_table SET first_name=?, last_name=?, email=?, username=?, role_id=?, department=?, status=? WHERE user_id=?");
+            $stmt->bind_param("sssssssi", $first_name, $last_name, $email, $username, $role_id, $department, $status, $user_id_edit);
         }
         
         if ($stmt->execute()) {
@@ -195,7 +206,7 @@ if (isset($_GET['toggle'])) {
 // GET USER FOR EDIT (AJAX)
 if (isset($_GET['get_user'])) {
     $get_id = $_GET['get_user'];
-    $stmt = $conn->prepare("SELECT user_id, first_name, last_name, email, username, role_id, status FROM user_table WHERE user_id = ?");
+    $stmt = $conn->prepare("SELECT user_id, first_name, last_name, email, username, role_id, department, status FROM user_table WHERE user_id = ?");
     $stmt->bind_param("i", $get_id);
     $stmt->execute();
     $result = $stmt->get_result();
@@ -225,7 +236,7 @@ $roles = [
 ];
 
 // GET ALL USERS
-$query = "SELECT user_id, username, email, first_name, last_name, role_id, status FROM user_table ORDER BY role_id, user_id";
+$query = "SELECT user_id, username, email, first_name, last_name, role_id, department, status FROM user_table ORDER BY role_id, user_id";
 $result = $conn->query($query);
 $all_users = [];
 while ($row = $result->fetch_assoc()) {
@@ -273,6 +284,19 @@ if ($notif_check && $notif_check->num_rows > 0) {
         }
         $n->close();
     }
+}
+
+// Helper function to get department display name
+function getDepartmentDisplay($dept_code) {
+    $departments = [
+        'BSIT' => 'BS Information Technology (BSIT)',
+        'BSCRIM' => 'BS Criminology (BSCRIM)',
+        'BSHTM' => 'BS Hospitality Management (BSHTM)',
+        'BSED' => 'BS Education (BSED)',
+        'BSBA' => 'BS Business Administration (BSBA)'
+    ];
+    if (!$dept_code) return 'N/A';
+    return isset($departments[$dept_code]) ? $departments[$dept_code] : $dept_code;
 }
 ?>
 <!DOCTYPE html>
@@ -345,19 +369,16 @@ if ($notif_check && $notif_check->num_rows > 0) {
         .sidebar-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 999; display: none; }
         .sidebar-overlay.show { display: block; }
         
-        /* Page Header */
         .page-header { margin-bottom: 30px; }
         .page-header h1 { font-size: 1.8rem; font-weight: 700; color: #d32f2f; display: flex; align-items: center; gap: 12px; }
         .page-header p { color: #6b7280; margin-top: 5px; }
         
-        /* Stats Grid - Like Image 2 */
         .stats-grid { display: flex; gap: 20px; margin-bottom: 30px; flex-wrap: wrap; }
         .stat-card { background: white; border-radius: 16px; padding: 20px 25px; flex: 1; min-width: 150px; border: 1px solid #ffcdd2; transition: all 0.3s; }
         .stat-card:hover { transform: translateY(-3px); box-shadow: 0 10px 25px rgba(211,47,47,0.1); }
         .stat-number { font-size: 2rem; font-weight: 700; color: #d32f2f; margin-bottom: 5px; }
         .stat-label { font-size: 0.8rem; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px; }
         
-        /* Filter Bar */
         .filter-bar { background: white; border-radius: 16px; padding: 20px; margin-bottom: 25px; border: 1px solid #ffcdd2; display: flex; flex-wrap: wrap; gap: 15px; align-items: center; }
         .filter-input { flex: 2; min-width: 200px; padding: 10px 16px; border: 1px solid #ffcdd2; border-radius: 40px; font-size: 0.85rem; background: #f8f9fa; }
         .filter-select { padding: 10px 16px; border-radius: 40px; border: 1px solid #ffcdd2; background: #f8f9fa; font-size: 0.85rem; cursor: pointer; }
@@ -368,7 +389,6 @@ if ($notif_check && $notif_check->num_rows > 0) {
         .add-user-btn { background: #d32f2f; color: white; border: none; padding: 10px 24px; border-radius: 40px; cursor: pointer; font-weight: 500; margin-left: auto; display: flex; align-items: center; gap: 8px; }
         .add-user-btn:hover { background: #b71c1c; transform: translateY(-2px); }
         
-        /* Role Tabs - Like Image 2 Department Tabs */
         .role-tabs { display: flex; gap: 10px; margin-bottom: 25px; flex-wrap: wrap; border-bottom: 2px solid #ffcdd2; padding-bottom: 10px; }
         .role-tab { padding: 12px 24px; background: none; border: none; font-weight: 600; font-size: 0.9rem; color: #6b7280; cursor: pointer; transition: all 0.3s; border-radius: 30px; }
         .role-tab:hover { background: #fee2e2; color: #d32f2f; }
@@ -376,17 +396,14 @@ if ($notif_check && $notif_check->num_rows > 0) {
         .role-count-badge { background: #ffcdd2; color: #d32f2f; padding: 2px 8px; border-radius: 20px; font-size: 0.7rem; margin-left: 8px; }
         .role-tab.active .role-count-badge { background: rgba(255,255,255,0.3); color: white; }
         
-        /* Role Section Content */
         .role-content { display: none; }
         .role-content.active { display: block; }
         
-        /* Stats per role - Like Image 2 department stats */
         .role-stats { display: flex; gap: 20px; margin-bottom: 25px; flex-wrap: wrap; }
         .role-stat-card { background: white; border-radius: 12px; padding: 15px 20px; border: 1px solid #ffcdd2; }
         .role-stat-number { font-size: 1.5rem; font-weight: 700; color: #d32f2f; }
         .role-stat-label { font-size: 0.7rem; color: #6b7280; }
         
-        /* Users Table - Same as Image 2 */
         .users-table { width: 100%; border-collapse: collapse; background: white; border-radius: 16px; overflow: hidden; border: 1px solid #ffcdd2; }
         .users-table th { background: #fef2f2; text-align: left; padding: 15px 15px; color: #d32f2f; font-weight: 600; font-size: 0.8rem; border-bottom: 1px solid #ffcdd2; }
         .users-table td { padding: 15px 15px; border-bottom: 1px solid #ffebee; font-size: 0.85rem; vertical-align: middle; }
@@ -400,20 +417,21 @@ if ($notif_check && $notif_check->num_rows > 0) {
         .status-badge.active { background: #e8f5e9; color: #2e7d32; }
         .status-badge.inactive { background: #ffebee; color: #c62828; }
         
-        .action-buttons { display: flex; gap: 8px; }
-        .action-btn { background: none; border: none; cursor: pointer; font-size: 1rem; padding: 6px; border-radius: 8px; transition: all 0.2s; }
-        .action-btn.edit { color: #3b82f6; }
-        .action-btn.edit:hover { background: #eff6ff; transform: scale(1.05); }
-        .action-btn.toggle-status { color: #f59e0b; }
-        .action-btn.toggle-status:hover { background: #fffbeb; transform: scale(1.05); }
-        .action-btn.delete { color: #ef4444; }
-        .action-btn.delete:hover { background: #fef2f2; transform: scale(1.05); }
+        .department-badge { display: inline-block; padding: 4px 10px; background: #e3f2fd; color: #1976d2; border-radius: 20px; font-size: 0.7rem; font-weight: 500; }
         
-        /* Modal */
+        .action-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+        .action-btn { background: none; border: none; cursor: pointer; font-size: 0.75rem; padding: 6px 12px; border-radius: 6px; transition: all 0.2s; font-weight: 500; display: inline-flex; align-items: center; gap: 5px; }
+        .action-btn.edit { color: #3b82f6; background: #eff6ff; }
+        .action-btn.edit:hover { background: #3b82f6; color: white; }
+        .action-btn.toggle-status { color: #f59e0b; background: #fffbeb; }
+        .action-btn.toggle-status:hover { background: #f59e0b; color: white; }
+        .action-btn.delete { color: #ef4444; background: #fef2f2; }
+        .action-btn.delete:hover { background: #ef4444; color: white; }
+        
         .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1100; align-items: center; justify-content: center; }
         .modal.show { display: flex; }
-        .modal-content { background: white; border-radius: 20px; width: 500px; max-width: 90%; animation: slideUp 0.3s; }
-        .modal-header { padding: 20px; border-bottom: 1px solid #ffcdd2; display: flex; justify-content: space-between; align-items: center; }
+        .modal-content { background: white; border-radius: 20px; width: 550px; max-width: 90%; animation: slideUp 0.3s; max-height: 90vh; overflow-y: auto; }
+        .modal-header { padding: 20px; border-bottom: 1px solid #ffcdd2; display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; background: white; z-index: 10; }
         .modal-header h3 { font-size: 1.2rem; font-weight: 600; color: #d32f2f; }
         .close-modal { font-size: 1.5rem; cursor: pointer; color: #6b7280; }
         .close-modal:hover { color: #d32f2f; }
@@ -423,7 +441,7 @@ if ($notif_check && $notif_check->num_rows > 0) {
         .form-group input, .form-group select { width: 100%; padding: 10px 14px; border: 1px solid #ffcdd2; border-radius: 10px; font-size: 0.85rem; }
         .form-group input:focus, .form-group select:focus { outline: none; border-color: #d32f2f; }
         .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
-        .modal-footer { padding: 20px; border-top: 1px solid #ffcdd2; display: flex; justify-content: flex-end; gap: 12px; }
+        .modal-footer { padding: 20px; border-top: 1px solid #ffcdd2; display: flex; justify-content: flex-end; gap: 12px; position: sticky; bottom: 0; background: white; }
         .btn-cancel { background: #fef2f2; color: #6b7280; border: none; padding: 8px 22px; border-radius: 8px; cursor: pointer; font-weight: 500; }
         .btn-cancel:hover { background: #fee2e2; }
         .btn-save { background: #d32f2f; color: white; border: none; padding: 8px 22px; border-radius: 8px; cursor: pointer; font-weight: 500; }
@@ -439,7 +457,6 @@ if ($notif_check && $notif_check->num_rows > 0) {
         @keyframes fadeIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
         @keyframes slideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
         
-        /* Dark Mode */
         body.dark-mode { background: #0f172a; }
         body.dark-mode .top-nav { background: #1e293b; border-bottom-color: #334155; }
         body.dark-mode .logo { color: #fecaca; }
@@ -458,7 +475,7 @@ if ($notif_check && $notif_check->num_rows > 0) {
         body.dark-mode .filter-input, body.dark-mode .filter-select { background: #334155; border-color: #475569; color: white; }
         body.dark-mode .clear-btn { background: #334155; color: #e5e7eb; border-color: #475569; }
         body.dark-mode .modal-content { background: #1e293b; }
-        body.dark-mode .modal-header { border-bottom-color: #334155; }
+        body.dark-mode .modal-header { background: #1e293b; border-bottom-color: #334155; }
         body.dark-mode .modal-header h3 { color: #fecaca; }
         body.dark-mode .form-group label { color: #e5e7eb; }
         body.dark-mode .form-group input, body.dark-mode .form-group select { background: #334155; border-color: #475569; color: white; }
@@ -466,6 +483,14 @@ if ($notif_check && $notif_check->num_rows > 0) {
         body.dark-mode .role-tab { color: #94a3b8; }
         body.dark-mode .role-tab:hover { background: #334155; color: #fecaca; }
         body.dark-mode .role-tab.active { background: #d32f2f; color: white; }
+        body.dark-mode .department-badge { background: #1e3a5f; color: #60a5fa; }
+        body.dark-mode .modal-footer { background: #1e293b; border-top-color: #334155; }
+        body.dark-mode .action-btn.edit { background: #1e3a5f; color: #60a5fa; }
+        body.dark-mode .action-btn.edit:hover { background: #3b82f6; color: white; }
+        body.dark-mode .action-btn.toggle-status { background: #3d2a1a; color: #f59e0b; }
+        body.dark-mode .action-btn.toggle-status:hover { background: #f59e0b; color: white; }
+        body.dark-mode .action-btn.delete { background: #3a1a1a; color: #ef4444; }
+        body.dark-mode .action-btn.delete:hover { background: #ef4444; color: white; }
         
         @media (max-width: 768px) {
             .top-nav { left: 0; padding: 0 16px; }
@@ -477,9 +502,8 @@ if ($notif_check && $notif_check->num_rows > 0) {
             .filter-input, .filter-select, .filter-btn, .clear-btn, .add-user-btn { width: 100%; margin-left: 0; }
             .form-row { grid-template-columns: 1fr; }
             .role-tabs { flex-wrap: wrap; }
-            .users-table th, .users-table td { display: block; width: 100%; }
-            .users-table td { padding: 10px 12px; }
-            .action-buttons { justify-content: flex-start; }
+            .modal-content { width: 95%; }
+            .action-buttons { flex-wrap: wrap; justify-content: center; }
         }
     </style>
 </head>
@@ -534,14 +558,12 @@ if ($notif_check && $notif_check->num_rows > 0) {
         </div>
         <?php endif; ?>
         
-        <!-- Stats Cards -->
         <div class="stats-grid">
             <div class="stat-card"><div class="stat-number"><?= $total_users ?></div><div class="stat-label">Total Users</div></div>
             <div class="stat-card"><div class="stat-number"><?= $active_users ?></div><div class="stat-label">Active Users</div></div>
             <div class="stat-card"><div class="stat-number"><?= $inactive_users ?></div><div class="stat-label">Inactive Users</div></div>
         </div>
         
-        <!-- Filter Bar -->
         <div class="filter-bar">
             <input type="text" id="searchInput" class="filter-input" placeholder="Search by name, email, username...">
             <select id="statusFilter" class="filter-select">
@@ -554,7 +576,6 @@ if ($notif_check && $notif_check->num_rows > 0) {
             <button id="addUserBtn" class="add-user-btn"><i class="fas fa-plus"></i> Add User</button>
         </div>
         
-        <!-- Role Tabs (Like Department Tabs in Image 2) -->
         <div class="role-tabs" id="roleTabs">
             <?php foreach ($users_by_role as $role_id => $role_data): ?>
                 <button class="role-tab" data-role="<?= $role_id ?>">
@@ -573,10 +594,8 @@ if ($notif_check && $notif_check->num_rows > 0) {
             <?php endforeach; ?>
         </div>
         
-        <!-- Role Content Sections -->
         <?php foreach ($users_by_role as $role_id => $role_data): ?>
         <div class="role-content" data-role-content="<?= $role_id ?>">
-            <!-- Role Stats -->
             <div class="role-stats">
                 <div class="role-stat-card"><div class="role-stat-number"><?= $role_data['count'] ?></div><div class="role-stat-label">Total <?= htmlspecialchars($role_data['name']) ?> Users</div></div>
                 <?php 
@@ -588,16 +607,16 @@ if ($notif_check && $notif_check->num_rows > 0) {
                 <div class="role-stat-card"><div class="role-stat-number"><?= $active_role_count ?></div><div class="role-stat-label">Active <?= htmlspecialchars($role_data['name']) ?> Users</div></div>
             </div>
             
-            <!-- Users Table -->
             <?php if (empty($role_data['users'])): ?>
                 <div class="empty-state">
                     <i class="fas fa-user-slash"></i>
                     <p>No <?= htmlspecialchars($role_data['name']) ?> users found.</p>
                 </div>
             <?php else: ?>
+                <div class="table-responsive">
                 <table class="users-table">
                     <thead>
-                        <tr><th>#</th><th>User Name</th><th>Email</th><th>Username</th><th>Status</th><th>Actions</th></tr>
+                        <tr><th>#</th><th>User Name</th><th>Email</th><th>Username</th><th>Department</th><th>Status</th><th>Actions</th></tr>
                     </thead>
                     <tbody>
                         <?php $counter = 1; ?>
@@ -607,43 +626,111 @@ if ($notif_check && $notif_check->num_rows > 0) {
                             <td><div class="user-name-cell"><div class="user-avatar-small"><?= strtoupper(substr($user['first_name'], 0, 1) . substr($user['last_name'], 0, 1)) ?></div><span><?= htmlspecialchars($user['first_name'] . ' ' . $user['last_name']) ?></span></div></td>
                             <td><?= htmlspecialchars($user['email']) ?></td>
                             <td><?= htmlspecialchars($user['username']) ?></td>
+                            <td>
+                                <?php if ($user['role_id'] == 2 || $user['role_id'] == 3): ?>
+                                    <span class="department-badge">
+                                        <i class="fas fa-building"></i> 
+                                        <?= htmlspecialchars(getDepartmentDisplay($user['department'])) ?>
+                                    </span>
+                                <?php else: ?>
+                                    <span class="department-badge" style="background:#fef2f2; color:#6b7280;">
+                                        <i class="fas fa-minus-circle"></i> N/A
+                                    </span>
+                                <?php endif; ?>
+                             </td>
                             <td><span class="status-badge <?= strtolower($user['status']) ?>"><?= $user['status'] ?></span></td>
                             <td class="action-buttons">
-                                <button class="action-btn edit" onclick="editUser(<?= $user['user_id'] ?>)"><i class="fas fa-edit"></i></button>
-                                <button class="action-btn toggle-status" onclick="toggleStatus(<?= $user['user_id'] ?>, '<?= $user['status'] ?>')"><i class="fas <?= $user['status'] == 'Active' ? 'fa-ban' : 'fa-check-circle' ?>"></i></button>
-                                <button class="action-btn delete" onclick="deleteUser(<?= $user['user_id'] ?>)"><i class="fas fa-trash"></i></button>
-                            </td>
-                        </tr>
+                                <button class="action-btn edit" onclick="editUser(<?= $user['user_id'] ?>)"><i class="fas fa-edit"></i> Edit</button>
+                                <button class="action-btn toggle-status" onclick="toggleStatus(<?= $user['user_id'] ?>, '<?= $user['status'] ?>')"><i class="fas <?= $user['status'] == 'Active' ? 'fa-ban' : 'fa-check-circle' ?>"></i> <?= $user['status'] == 'Active' ? 'Deactivate' : 'Activate' ?></button>
+                                <button class="action-btn delete" onclick="deleteUser(<?= $user['user_id'] ?>)"><i class="fas fa-trash"></i> Delete</button>
+                             </td>
+                         </tr>
                         <?php endforeach; ?>
                     </tbody>
                 </table>
+                </div>
             <?php endif; ?>
         </div>
         <?php endforeach; ?>
     </main>
     
-    <!-- Add/Edit User Modal -->
+    <!-- ADD/EDIT USER MODAL - WITH DEPARTMENT FIELD ALWAYS VISIBLE -->
     <div id="userModal" class="modal">
         <div class="modal-content">
             <div class="modal-header">
-                <h3 id="modalTitle">Add New User</h3>
+                <h3 id="modalTitle"><i class="fas fa-user-plus"></i> Add New User</h3>
                 <span class="close-modal" onclick="closeModal()">&times;</span>
             </div>
             <form id="userForm" method="POST" action="">
                 <div class="modal-body">
                     <input type="hidden" id="user_id" name="user_id">
                     <input type="hidden" id="form_action" name="action" value="add">
+                    
                     <div class="form-row">
-                        <div class="form-group"><label>First Name</label><input type="text" id="first_name" name="first_name" required></div>
-                        <div class="form-group"><label>Last Name</label><input type="text" id="last_name" name="last_name" required></div>
+                        <div class="form-group">
+                            <label>First Name <span style="color:#d32f2f;">*</span></label>
+                            <input type="text" id="first_name" name="first_name" placeholder="Enter first name" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Last Name <span style="color:#d32f2f;">*</span></label>
+                            <input type="text" id="last_name" name="last_name" placeholder="Enter last name" required>
+                        </div>
                     </div>
-                    <div class="form-group"><label>Email</label><input type="email" id="email" name="email" required></div>
-                    <div class="form-group"><label>Username</label><input type="text" id="username" name="username" required></div>
-                    <div class="form-group"><label>Password</label><input type="password" id="password" name="password" placeholder="Leave blank to keep current password"></div>
-                    <div class="form-group"><label>Role</label><select id="role_id" name="role_id" required><?php foreach ($roles as $id => $name): ?><option value="<?= $id ?>"><?= htmlspecialchars($name) ?></option><?php endforeach; ?></select></div>
-                    <div class="form-group"><label>Status</label><select id="status" name="status"><option value="Active">Active</option><option value="Inactive">Inactive</option></select></div>
+                    
+                    <div class="form-group">
+                        <label>Email <span style="color:#d32f2f;">*</span></label>
+                        <input type="email" id="email" name="email" placeholder="Enter email address" required>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Username <span style="color:#d32f2f;">*</span></label>
+                        <input type="text" id="username" name="username" placeholder="Enter username" required>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Password <span id="passwordRequired" style="color:#d32f2f;">*</span></label>
+                        <input type="password" id="password" name="password" placeholder="Enter password (min. 6 characters)">
+                        <small id="passwordNote" style="font-size:0.7rem; color:#6b7280; display:none;">Leave blank to keep current password</small>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Role <span style="color:#d32f2f;">*</span></label>
+                        <select id="role_id" name="role_id" required>
+                            <option value="1">Admin</option>
+                            <option value="2">Student</option>
+                            <option value="3">Research Adviser</option>
+                            <option value="4">Dean</option>
+                            <option value="5">Librarian</option>
+                            <option value="6">Coordinator</option>
+                        </select>
+                    </div>
+                    
+                    <!-- DEPARTMENT FIELD - ALWAYS VISIBLE -->
+                    <div class="form-group" id="departmentGroup">
+                        <label>Department</label>
+                        <select id="department" name="department">
+                            <option value="">-- Select Department --</option>
+                            <option value="BSIT">BS Information Technology (BSIT)</option>
+                            <option value="BSCRIM">BS Criminology (BSCRIM)</option>
+                            <option value="BSHTM">BS Hospitality Management (BSHTM)</option>
+                            <option value="BSED">BS Education (BSED)</option>
+                            <option value="BSBA">BS Business Administration (BSBA)</option>
+                        </select>
+                        <small style="font-size:0.7rem; color:#6b7280;">Recommended for Students and Research Advisers</small>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Status <span style="color:#d32f2f;">*</span></label>
+                        <select id="status" name="status">
+                            <option value="Active">Active</option>
+                            <option value="Inactive">Inactive</option>
+                        </select>
+                    </div>
                 </div>
-                <div class="modal-footer"><button type="button" class="btn-cancel" onclick="closeModal()">Cancel</button><button type="submit" class="btn-save">Save User</button></div>
+                <div class="modal-footer">
+                    <button type="button" class="btn-cancel" onclick="closeModal()">Cancel</button>
+                    <button type="submit" class="btn-save">Save User</button>
+                </div>
             </form>
         </div>
     </div>
@@ -668,32 +755,30 @@ if ($notif_check && $notif_check->num_rows > 0) {
         
         let currentRoleTab = null;
         
-        // Role Tab Functionality
+        // Initialize Role Tabs
         function initRoleTabs() {
             const tabs = document.querySelectorAll('.role-tab');
             const contents = document.querySelectorAll('.role-content');
             
             if (tabs.length > 0) {
-                // Set first tab as active by default
                 if (!currentRoleTab) {
                     tabs[0].classList.add('active');
                     const firstRoleId = tabs[0].getAttribute('data-role');
-                    document.querySelector(`.role-content[data-role-content="${firstRoleId}"]`).classList.add('active');
+                    const firstContent = document.querySelector(`.role-content[data-role-content="${firstRoleId}"]`);
+                    if (firstContent) firstContent.classList.add('active');
                     currentRoleTab = firstRoleId;
                 }
                 
                 tabs.forEach(tab => {
                     tab.addEventListener('click', function() {
                         const roleId = this.getAttribute('data-role');
-                        
-                        // Remove active class from all tabs and contents
                         tabs.forEach(t => t.classList.remove('active'));
                         contents.forEach(c => c.classList.remove('active'));
-                        
-                        // Add active class to current tab and content
                         this.classList.add('active');
-                        document.querySelector(`.role-content[data-role-content="${roleId}"]`).classList.add('active');
+                        const selectedContent = document.querySelector(`.role-content[data-role-content="${roleId}"]`);
+                        if (selectedContent) selectedContent.classList.add('active');
                         currentRoleTab = roleId;
+                        applyFilter();
                     });
                 });
             }
@@ -703,29 +788,22 @@ if ($notif_check && $notif_check->num_rows > 0) {
         function applyFilter() {
             const searchTerm = searchInput ? searchInput.value.trim().toLowerCase() : '';
             const status = statusFilter ? statusFilter.value : '';
-            
-            // Get current active role
             const activeTab = document.querySelector('.role-tab.active');
             if (!activeTab) return;
             
             const roleId = activeTab.getAttribute('data-role');
             const roleContent = document.querySelector(`.role-content[data-role-content="${roleId}"]`);
+            if (!roleContent) return;
+            
             const rows = roleContent.querySelectorAll('tbody tr');
             
             let visibleCount = 0;
             rows.forEach(row => {
                 const userName = row.getAttribute('data-name') || '';
                 const rowStatus = row.getAttribute('data-status') || '';
-                
-                let matchesSearch = true;
-                let matchesStatus = true;
-                
-                if (searchTerm) {
-                    matchesSearch = userName.includes(searchTerm);
-                }
-                if (status) {
-                    matchesStatus = rowStatus === status;
-                }
+                let matchesSearch = true, matchesStatus = true;
+                if (searchTerm) matchesSearch = userName.includes(searchTerm);
+                if (status) matchesStatus = rowStatus === status;
                 
                 if (matchesSearch && matchesStatus) {
                     row.style.display = '';
@@ -735,15 +813,10 @@ if ($notif_check && $notif_check->num_rows > 0) {
                 }
             });
             
-            // Update count badge
             const countBadge = activeTab.querySelector('.role-count-badge');
             if (countBadge) {
                 const totalRows = rows.length;
-                if (searchTerm || status) {
-                    countBadge.textContent = visibleCount;
-                } else {
-                    countBadge.textContent = totalRows;
-                }
+                countBadge.textContent = (searchTerm || status) ? visibleCount : totalRows;
             }
         }
         
@@ -758,30 +831,15 @@ if ($notif_check && $notif_check->num_rows > 0) {
         if (topSearchInput && searchInput) {
             topSearchInput.value = searchInput.value;
             topSearchInput.addEventListener('keypress', function(e) {
-                if (e.key === 'Enter') {
-                    searchInput.value = this.value;
-                    applyFilter();
-                }
+                if (e.key === 'Enter') { searchInput.value = this.value; applyFilter(); }
             });
-            topSearchInput.addEventListener('input', function() {
-                searchInput.value = this.value;
-                applyFilter();
-            });
+            topSearchInput.addEventListener('input', function() { searchInput.value = this.value; applyFilter(); });
         }
-        
         if (searchInput) {
-            searchInput.addEventListener('keypress', function(e) {
-                if (e.key === 'Enter') applyFilter();
-            });
-            searchInput.addEventListener('input', function() {
-                applyFilter();
-            });
+            searchInput.addEventListener('keypress', function(e) { if (e.key === 'Enter') applyFilter(); });
+            searchInput.addEventListener('input', function() { applyFilter(); });
         }
-        
-        if (statusFilter) {
-            statusFilter.addEventListener('change', applyFilter);
-        }
-        
+        if (statusFilter) statusFilter.addEventListener('change', applyFilter);
         if (applyFilters) applyFilters.addEventListener('click', applyFilter);
         if (clearFilters) clearFilters.addEventListener('click', clearAllFilters);
         
@@ -797,16 +855,15 @@ if ($notif_check && $notif_check->num_rows > 0) {
             if (e.key === 'Escape') {
                 if (sidebar.classList.contains('open')) closeSidebar();
                 if (profileDropdown && profileDropdown.classList.contains('show')) profileDropdown.classList.remove('show');
-                if (userModal.classList.contains('show')) closeModal();
+                if (userModal && userModal.classList.contains('show')) closeModal();
             }
         });
-        
         window.addEventListener('resize', function() { if (window.innerWidth > 768 && sidebar.classList.contains('open')) closeSidebar(); });
         
         // Profile Dropdown
         if (profileWrapper && profileDropdown) {
             profileWrapper.addEventListener('click', function(e) { e.stopPropagation(); profileDropdown.classList.toggle('show'); });
-            document.addEventListener('click', function(e) { if (profileDropdown.classList.contains('show') && !profileWrapper.contains(e.target)) profileDropdown.classList.remove('show'); });
+            document.addEventListener('click', function(e) { if (profileDropdown && profileDropdown.classList.contains('show') && !profileWrapper.contains(e.target)) profileDropdown.classList.remove('show'); });
         }
         
         // Dark Mode
@@ -822,8 +879,40 @@ if ($notif_check && $notif_check->num_rows > 0) {
         }
         
         // Modal Functions
-        function openModal() { userModal.classList.add('show'); }
-        function closeModal() { userModal.classList.remove('show'); userForm.reset(); document.getElementById('user_id').value = ''; formAction.value = 'add'; modalTitle.textContent = 'Add New User'; }
+        function openModal() { 
+            if (userModal) {
+                userModal.classList.add('show'); 
+                updatePasswordRequirement();
+            }
+        }
+        
+        function closeModal() { 
+            if (userModal) {
+                userModal.classList.remove('show'); 
+                if (userForm) userForm.reset(); 
+                const userIdField = document.getElementById('user_id');
+                if (userIdField) userIdField.value = ''; 
+                if (formAction) formAction.value = 'add'; 
+                if (modalTitle) modalTitle.innerHTML = '<i class="fas fa-user-plus"></i> Add New User'; 
+            }
+        }
+        
+        function updatePasswordRequirement() {
+            const formActionValue = document.getElementById('form_action').value;
+            const passwordField = document.getElementById('password');
+            const passwordRequired = document.getElementById('passwordRequired');
+            const passwordNote = document.getElementById('passwordNote');
+            
+            if (formActionValue === 'add') {
+                passwordField.required = true;
+                if (passwordRequired) passwordRequired.style.display = 'inline';
+                if (passwordNote) passwordNote.style.display = 'none';
+            } else {
+                passwordField.required = false;
+                if (passwordRequired) passwordRequired.style.display = 'none';
+                if (passwordNote) passwordNote.style.display = 'block';
+            }
+        }
         
         function editUser(userId) {
             fetch('users.php?get_user=' + userId)
@@ -837,8 +926,13 @@ if ($notif_check && $notif_check->num_rows > 0) {
                         document.getElementById('username').value = data.user.username;
                         document.getElementById('role_id').value = data.user.role_id;
                         document.getElementById('status').value = data.user.status;
-                        formAction.value = 'edit';
-                        modalTitle.textContent = 'Edit User';
+                        const deptField = document.getElementById('department');
+                        if (deptField && data.user.department) {
+                            deptField.value = data.user.department;
+                        }
+                        if (formAction) formAction.value = 'edit';
+                        if (modalTitle) modalTitle.innerHTML = '<i class="fas fa-user-edit"></i> Edit User';
+                        updatePasswordRequirement();
                         openModal();
                     }
                 })
@@ -859,15 +953,25 @@ if ($notif_check && $notif_check->num_rows > 0) {
         }
         
         if (addUserBtn) {
-            addUserBtn.addEventListener('click', function() { userForm.reset(); document.getElementById('user_id').value = ''; formAction.value = 'add'; modalTitle.textContent = 'Add New User'; openModal(); });
+            addUserBtn.addEventListener('click', function() { 
+                if (userForm) userForm.reset(); 
+                const userIdField = document.getElementById('user_id');
+                if (userIdField) userIdField.value = ''; 
+                if (formAction) formAction.value = 'add'; 
+                if (modalTitle) modalTitle.innerHTML = '<i class="fas fa-user-plus"></i> Add New User'; 
+                // Reset department select
+                const deptField = document.getElementById('department');
+                if (deptField) deptField.value = '';
+                updatePasswordRequirement();
+                openModal(); 
+            });
         }
         
         window.addEventListener('click', function(e) { if (e.target === userModal) closeModal(); });
         
-        // Initialize
         initDarkMode();
         initRoleTabs();
-        console.log('User Management Page Initialized - Tabbed by Role');
+        console.log('User Management Page Initialized');
     </script>
 </body>
 </html>
