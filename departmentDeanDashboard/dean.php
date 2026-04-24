@@ -1,4 +1,4 @@
-<?php
+ <?php
 session_start();
 include("../config/db.php");
 
@@ -85,15 +85,16 @@ if ($notif_row = $notif_result->fetch_assoc()) {
 }
 $notif_stmt->close();
 
-// GET RECENT NOTIFICATIONS FOR DROPDOWN
+// GET RECENT NOTIFICATIONS FOR DROPDOWN - FIXED VERSION
 $recentNotifications = [];
-$notif_list_query = "SELECT $id_column as id, user_id, thesis_id, message, is_read, created_at FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 5";
+$notif_list_query = "SELECT notification_id as id, user_id, thesis_id, message, type, link, is_read, created_at FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 10";
 $notif_list_stmt = $conn->prepare($notif_list_query);
 $notif_list_stmt->bind_param("i", $user_id);
 $notif_list_stmt->execute();
 $notif_list_result = $notif_list_stmt->get_result();
 while ($row = $notif_list_result->fetch_assoc()) {
-    if ($row['thesis_id']) {
+    // Get thesis title if thesis_id exists
+    if ($row['thesis_id'] && $row['thesis_id'] > 0) {
         $thesis_q = $conn->prepare("SELECT title FROM thesis_table WHERE thesis_id = ?");
         $thesis_q->bind_param("i", $row['thesis_id']);
         $thesis_q->execute();
@@ -110,7 +111,7 @@ $notif_list_stmt->close();
 // MARK NOTIFICATION AS READ (via AJAX)
 if (isset($_POST['mark_read']) && isset($_POST['notif_id'])) {
     $notif_id = intval($_POST['notif_id']);
-    $update_query = "UPDATE notifications SET is_read = 1 WHERE $id_column = ? AND user_id = ?";
+    $update_query = "UPDATE notifications SET is_read = 1 WHERE notification_id = ? AND user_id = ?";
     $update_stmt = $conn->prepare($update_query);
     $update_stmt->bind_param("ii", $notif_id, $user_id);
     $update_stmt->execute();
@@ -198,10 +199,27 @@ if ($thesis_table_exists) {
     $stats['theses_approved'] = 0;
 }
 
-// ==================== GET FORWARDED THESES FOR DEAN REVIEW (WALA NAY STATUS COLUMN) ====================
+// ==================== GET FORWARDED THESES FOR DEAN REVIEW ====================
 $forwarded_theses = [];
-// Since wala nay status column, ang forwarded theses kay ang mga non-archived thesis
-// I-note lang nga wala tay way ma-determine kung forwarded na ba o hindi
+if ($thesis_table_exists && $department_id) {
+    // Get theses that have been forwarded to dean (not archived, with department match)
+    $forwarded_query = "SELECT t.*, u.first_name, u.last_name, d.department_name, d.department_code
+                        FROM thesis_table t
+                        JOIN user_table u ON t.student_id = u.user_id
+                        LEFT JOIN department_table d ON t.department_id = d.department_id
+                        WHERE t.department_id = ? AND (t.is_archived = 0 OR t.is_archived IS NULL)
+                        ORDER BY t.date_submitted DESC";
+    $forwarded_stmt = $conn->prepare($forwarded_query);
+    $forwarded_stmt->bind_param("i", $department_id);
+    $forwarded_stmt->execute();
+    $forwarded_result = $forwarded_stmt->get_result();
+    if ($forwarded_result && $forwarded_result->num_rows > 0) {
+        while ($row = $forwarded_result->fetch_assoc()) {
+            $forwarded_theses[] = $row;
+        }
+    }
+    $forwarded_stmt->close();
+}
 
 // ==================== GET FACULTY MEMBERS IN DEPARTMENT ====================
 $faculty_members = [];
@@ -215,7 +233,7 @@ if ($faculty_result && $faculty_result->num_rows > 0) {
         $project_count = 0;
         if ($thesis_table_exists) {
             $proj_q = $conn->prepare("SELECT COUNT(*) as c FROM thesis_table WHERE adviser LIKE ? AND department_id = ?");
-            $search_name = '%' . $row['first_name'] . '%';
+            $search_name = '%' . $row['first_name'] . '%' . $row['last_name'] . '%';
             $proj_q->bind_param("si", $search_name, $department_id);
             $proj_q->execute();
             $proj_result = $proj_q->get_result();

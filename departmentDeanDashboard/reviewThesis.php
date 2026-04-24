@@ -1,4 +1,4 @@
-<?php
+ <?php
 session_start();
 include("../config/db.php");
 
@@ -41,6 +41,33 @@ $thesis_status = '';
 $student_id = 0;
 $adviser_name = '';
 $thesis_department_id = null;
+
+// FIX: Ensure status column exists in thesis_table
+$check_status_column = $conn->query("SHOW COLUMNS FROM thesis_table LIKE 'status'");
+if (!$check_status_column || $check_status_column->num_rows == 0) {
+    $conn->query("ALTER TABLE thesis_table ADD COLUMN status VARCHAR(50) DEFAULT 'pending'");
+}
+
+// Also check for other needed columns
+$check_approved_by_dean_at = $conn->query("SHOW COLUMNS FROM thesis_table LIKE 'approved_by_dean_at'");
+if (!$check_approved_by_dean_at || $check_approved_by_dean_at->num_rows == 0) {
+    $conn->query("ALTER TABLE thesis_table ADD COLUMN approved_by_dean_at DATETIME NULL");
+}
+
+$check_dean_feedback = $conn->query("SHOW COLUMNS FROM thesis_table LIKE 'dean_feedback'");
+if (!$check_dean_feedback || $check_dean_feedback->num_rows == 0) {
+    $conn->query("ALTER TABLE thesis_table ADD COLUMN dean_feedback TEXT NULL");
+}
+
+$check_is_archived = $conn->query("SHOW COLUMNS FROM thesis_table LIKE 'is_archived'");
+if (!$check_is_archived || $check_is_archived->num_rows == 0) {
+    $conn->query("ALTER TABLE thesis_table ADD COLUMN is_archived TINYINT DEFAULT 0");
+}
+
+$check_archived_date = $conn->query("SHOW COLUMNS FROM thesis_table LIKE 'archived_date'");
+if (!$check_archived_date || $check_archived_date->num_rows == 0) {
+    $conn->query("ALTER TABLE thesis_table ADD COLUMN archived_date DATETIME NULL");
+}
 
 if ($thesis_id > 0) {
     $thesis_query = "SELECT t.*, d.department_name, d.department_code
@@ -85,6 +112,20 @@ if ($thesis_id > 0) {
 
 // ==================== FUNCTION TO NOTIFY LIBRARIAN ====================
 function notifyLibrarian($conn, $thesis_id, $thesis_title, $student_name, $dean_name) {
+    // First ensure notifications table exists
+    $conn->query("CREATE TABLE IF NOT EXISTS notifications (
+        notification_id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        thesis_id INT NULL,
+        message TEXT NOT NULL,
+        type VARCHAR(50) DEFAULT 'info',
+        link VARCHAR(255) NULL,
+        is_read TINYINT DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX (user_id),
+        INDEX (is_read)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+    
     $lib_query = "SELECT user_id FROM user_table WHERE role_id = 5";
     $lib_result = $conn->query($lib_query);
     
@@ -97,7 +138,7 @@ function notifyLibrarian($conn, $thesis_id, $thesis_title, $student_name, $dean_
     while ($librarian = $lib_result->fetch_assoc()) {
         $librarian_id = $librarian['user_id'];
         $message = "📚 Thesis ready for archiving: \"" . $thesis_title . "\" from student " . $student_name . ". Approved by Dean: " . $dean_name;
-        $link = "../librarian/archiveThesis.php?id=" . $thesis_id;
+        $link = "../librarian/view_thesis.php?id=" . $thesis_id;
         
         $insert_sql = "INSERT INTO notifications (user_id, thesis_id, message, type, link, is_read, created_at) 
                        VALUES ($librarian_id, $thesis_id, '$message', 'dean_approved', '$link', 0, NOW())";
@@ -114,16 +155,21 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['forward_to_librarian']
     $thesis_id_post = intval($_POST['thesis_id']);
     $dean_feedback = isset($_POST['dean_feedback']) ? trim($_POST['dean_feedback']) : '';
     
+    // FIXED: Update query with proper error handling
     $update_query = "UPDATE thesis_table SET status = 'approved_by_dean', approved_by_dean_at = NOW() WHERE thesis_id = ?";
     $update_stmt = $conn->prepare($update_query);
-    $update_stmt->bind_param("i", $thesis_id_post);
-    $update_stmt->execute();
-    $update_stmt->close();
+    if ($update_stmt) {
+        $update_stmt->bind_param("i", $thesis_id_post);
+        $update_stmt->execute();
+        $update_stmt->close();
+    } else {
+        die("Error preparing query: " . $conn->error);
+    }
     
     if ($student_id > 0) {
-        $student_msg = "✅ Good news! Your thesis \"" . $thesis_title . "\" has been APPROVED by Dean " . $fullName . " and forwarded to the Librarian for archiving.";
+        $student_msg = "✅ Good news! Your thesis \"" . addslashes($thesis_title) . "\" has been APPROVED by Dean " . addslashes($fullName) . " and forwarded to the Librarian for archiving.";
         if (!empty($dean_feedback)) {
-            $student_msg .= " Feedback: " . $dean_feedback;
+            $student_msg .= " Feedback: " . addslashes($dean_feedback);
         }
         $notif_student = "INSERT INTO notifications (user_id, thesis_id, message, type, is_read, created_at) VALUES ($student_id, $thesis_id_post, '$student_msg', 'student_approved', 0, NOW())";
         $conn->query($notif_student);
@@ -137,9 +183,9 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['forward_to_librarian']
         $adviser_result = $adviser_stmt->get_result();
         if ($adviser_row = $adviser_result->fetch_assoc()) {
             $adviser_id = $adviser_row['user_id'];
-            $adviser_msg = "✅ Thesis \"" . $thesis_title . "\" has been APPROVED by Dean " . $fullName . " and forwarded to the Librarian.";
+            $adviser_msg = "✅ Thesis \"" . addslashes($thesis_title) . "\" has been APPROVED by Dean " . addslashes($fullName) . " and forwarded to the Librarian.";
             if (!empty($dean_feedback)) {
-                $adviser_msg .= " Feedback: " . $dean_feedback;
+                $adviser_msg .= " Feedback: " . addslashes($dean_feedback);
             }
             $notif_adviser = "INSERT INTO notifications (user_id, thesis_id, message, type, is_read, created_at) VALUES ($adviser_id, $thesis_id_post, '$adviser_msg', 'dean_approved', 0, NOW())";
             $conn->query($notif_adviser);
@@ -150,18 +196,18 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['forward_to_librarian']
     $student_name = $thesis_author;
     notifyLibrarian($conn, $thesis_id_post, $thesis_title, $student_name, $fullName);
     
-    // Notify coordinator
+    // Notify coordinator (role_id = 6)
     $get_coordinator = "SELECT user_id FROM user_table WHERE role_id = 6";
     $coord_result = $conn->query($get_coordinator);
     if ($coord_result && $coord_result->num_rows > 0) {
         while ($coord = $coord_result->fetch_assoc()) {
-            $coord_msg = "✅ Thesis \"" . $thesis_title . "\" has been APPROVED by Dean " . $fullName . " and forwarded to Librarian.";
+            $coord_msg = "✅ Thesis \"" . addslashes($thesis_title) . "\" has been APPROVED by Dean " . addslashes($fullName) . " and forwarded to Librarian.";
             $notif_coord = "INSERT INTO notifications (user_id, thesis_id, message, type, is_read, created_at) VALUES (" . $coord['user_id'] . ", $thesis_id_post, '$coord_msg', 'coordinator_info', 0, NOW())";
             $conn->query($notif_coord);
         }
     }
     
-    $dean_msg = "✅ You approved thesis \"" . $thesis_title . "\" and forwarded to Librarian";
+    $dean_msg = "✅ You approved thesis \"" . addslashes($thesis_title) . "\" and forwarded to Librarian";
     $notif_dean = "INSERT INTO notifications (user_id, thesis_id, message, type, is_read, created_at) VALUES ($user_id, $thesis_id_post, '$dean_msg', 'dean_action', 0, NOW())";
     $conn->query($notif_dean);
     
@@ -174,16 +220,21 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['return_to_coordinator'
     $thesis_id_post = intval($_POST['thesis_id']);
     $dean_feedback = isset($_POST['dean_feedback']) ? trim($_POST['dean_feedback']) : '';
     
+    // FIXED: Update query with proper error handling
     $update_query = "UPDATE thesis_table SET status = 'revision_needed', dean_feedback = ? WHERE thesis_id = ?";
     $update_stmt = $conn->prepare($update_query);
-    $update_stmt->bind_param("si", $dean_feedback, $thesis_id_post);
-    $update_stmt->execute();
-    $update_stmt->close();
+    if ($update_stmt) {
+        $update_stmt->bind_param("si", $dean_feedback, $thesis_id_post);
+        $update_stmt->execute();
+        $update_stmt->close();
+    } else {
+        die("Error preparing query: " . $conn->error);
+    }
     
     if ($student_id > 0) {
-        $student_msg = "❌ Your thesis \"" . $thesis_title . "\" needs revision as per Dean's review. Please work with your adviser.";
+        $student_msg = "❌ Your thesis \"" . addslashes($thesis_title) . "\" needs revision as per Dean's review. Please work with your adviser.";
         if (!empty($dean_feedback)) {
-            $student_msg .= " Feedback: " . $dean_feedback;
+            $student_msg .= " Feedback: " . addslashes($dean_feedback);
         }
         $notif_student = "INSERT INTO notifications (user_id, thesis_id, message, type, is_read, created_at) VALUES ($student_id, $thesis_id_post, '$student_msg', 'student_revision', 0, NOW())";
         $conn->query($notif_student);
@@ -193,16 +244,16 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['return_to_coordinator'
     $coord_result = $conn->query($get_coordinator);
     if ($coord_result && $coord_result->num_rows > 0) {
         while ($coord = $coord_result->fetch_assoc()) {
-            $coord_msg = "⚠️ Thesis \"" . $thesis_title . "\" was returned by Dean " . $fullName . " for revision.";
+            $coord_msg = "⚠️ Thesis \"" . addslashes($thesis_title) . "\" was returned by Dean " . addslashes($fullName) . " for revision.";
             if (!empty($dean_feedback)) {
-                $coord_msg .= " Feedback: " . $dean_feedback;
+                $coord_msg .= " Feedback: " . addslashes($dean_feedback);
             }
             $notif_coord = "INSERT INTO notifications (user_id, thesis_id, message, type, is_read, created_at) VALUES (" . $coord['user_id'] . ", $thesis_id_post, '$coord_msg', 'coordinator_revision', 0, NOW())";
             $conn->query($notif_coord);
         }
     }
     
-    $dean_msg = "❌ You returned thesis \"" . $thesis_title . "\" to Coordinator for revision";
+    $dean_msg = "❌ You returned thesis \"" . addslashes($thesis_title) . "\" to Coordinator for revision";
     $notif_dean = "INSERT INTO notifications (user_id, thesis_id, message, type, is_read, created_at) VALUES ($user_id, $thesis_id_post, '$dean_msg', 'dean_action', 0, NOW())";
     $conn->query($notif_dean);
     

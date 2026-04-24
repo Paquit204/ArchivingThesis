@@ -1,4 +1,4 @@
-<?php
+ <?php
 session_start();
 include("../config/db.php");
 
@@ -123,13 +123,23 @@ if ($thesis_id > 0 && $thesis_table_exists) {
 $message = '';
 $messageType = '';
 
-// HANDLE FORWARD TO DEAN
+// ========== FIXED: HANDLE FORWARD TO DEAN ==========
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['forward_to_dean'])) {
     $thesis_id_post = intval($_POST['thesis_id']);
     $coordinator_name = $fullName;
     
-    // Find dean with same department
-    $dean_query = "SELECT user_id FROM user_table WHERE role_id IN (2,3,4,5) AND department_id = ? LIMIT 1";
+    // Get the department name first
+    $dept_query = "SELECT department_name FROM department_table WHERE department_id = ?";
+    $dept_stmt = $conn->prepare($dept_query);
+    $dept_stmt->bind_param("i", $thesis_department_id);
+    $dept_stmt->execute();
+    $dept_result = $dept_stmt->get_result();
+    $dept = $dept_result->fetch_assoc();
+    $dept_name = $dept['department_name'] ?? 'Department';
+    $dept_stmt->close();
+    
+    // Find dean with same department (role_id = 4 for dean)
+    $dean_query = "SELECT user_id FROM user_table WHERE role_id = 4 AND department_id = ? LIMIT 1";
     $dean_stmt = $conn->prepare($dean_query);
     $dean_stmt->bind_param("i", $thesis_department_id);
     $dean_stmt->execute();
@@ -138,15 +148,20 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['forward_to_dean'])) {
     $dean_stmt->close();
     
     if ($dean) {
-        $notifMessage = "Thesis ready for Dean approval: \"" . $thesis_title . "\" from student " . $student_name . ". Forwarded by Coordinator: " . $coordinator_name;
+        // Create notification message
+        $notifMessage = "📋 Thesis ready for Dean approval: \"" . $thesis_title . "\" from student " . $student_name . ". Forwarded by Coordinator: " . $coordinator_name . " (" . $dept_name . " Department)";
+        $link = "reviewThesis.php?id=" . $thesis_id_post;
+        $type_value = 'dean_forward';
+        $is_read_value = 0;
         
-        $insert_notif = "INSERT INTO notifications (user_id, thesis_id, message, type, is_read, created_at) VALUES (?, ?, ?, 'dean_forward', 0, NOW())";
+        // Insert notification with proper fields
+        $insert_notif = "INSERT INTO notifications (user_id, thesis_id, message, type, link, is_read, created_at) VALUES (?, ?, ?, ?, ?, ?, NOW())";
         $insert_stmt = $conn->prepare($insert_notif);
-        $insert_stmt->bind_param("iis", $dean['user_id'], $thesis_id_post, $notifMessage);
+        $insert_stmt->bind_param("iisssi", $dean['user_id'], $thesis_id_post, $notifMessage, $type_value, $link, $is_read_value);
         $insert_stmt->execute();
         $insert_stmt->close();
         
-        $_SESSION['success_message'] = "Thesis forwarded to Dean successfully!";
+        $_SESSION['success_message'] = "✓ Thesis forwarded to " . $dept_name . " Dean successfully!";
     } else {
         $_SESSION['error_message'] = "No dean found for this department.";
     }
@@ -161,21 +176,35 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['request_revision'])) {
     $revision_feedback = isset($_POST['feedback']) ? trim($_POST['feedback']) : '';
     $coordinator_name = $fullName;
     
-    // Get faculty advisers in the same department
-    $faculty_query = "SELECT user_id FROM user_table WHERE role_id IN (2,3,4) AND department_id = ?";
+    // Get department name
+    $dept_query = "SELECT department_name FROM department_table WHERE department_id = ?";
+    $dept_stmt = $conn->prepare($dept_query);
+    $dept_stmt->bind_param("i", $thesis_department_id);
+    $dept_stmt->execute();
+    $dept_result = $dept_stmt->get_result();
+    $dept = $dept_result->fetch_assoc();
+    $dept_name = $dept['department_name'] ?? 'Department';
+    $dept_stmt->close();
+    
+    // Get faculty advisers in the same department (role_id = 3 for faculty)
+    $faculty_query = "SELECT user_id FROM user_table WHERE role_id = 3 AND department_id = ?";
     $faculty_stmt = $conn->prepare($faculty_query);
     $faculty_stmt->bind_param("i", $thesis_department_id);
     $faculty_stmt->execute();
     $faculty_result = $faculty_stmt->get_result();
     
     if ($faculty_result && $faculty_result->num_rows > 0) {
-        $notifMessage = "Revision requested for thesis: \"" . $thesis_title . "\". Coordinator: " . $coordinator_name . " Feedback: " . $revision_feedback;
-        $insert_notif = "INSERT INTO notifications (user_id, thesis_id, message, type, is_read, created_at) VALUES (?, ?, ?, 'revision_request', 0, NOW())";
+        $notifMessage = "📝 Revision requested for thesis: \"" . $thesis_title . "\". Coordinator: " . $coordinator_name . " Feedback: " . $revision_feedback;
+        $type_value = 'revision_request';
+        $is_read_value = 0;
+        $link = "reviewThesis.php?id=" . $thesis_id_post;
+        
+        $insert_notif = "INSERT INTO notifications (user_id, thesis_id, message, type, link, is_read, created_at) VALUES (?, ?, ?, ?, ?, ?, NOW())";
         $insert_stmt = $conn->prepare($insert_notif);
         
         while ($faculty = $faculty_result->fetch_assoc()) {
             $faculty_id = $faculty['user_id'];
-            $insert_stmt->bind_param("iis", $faculty_id, $thesis_id_post, $notifMessage);
+            $insert_stmt->bind_param("iisssi", $faculty_id, $thesis_id_post, $notifMessage, $type_value, $link, $is_read_value);
             $insert_stmt->execute();
         }
         $insert_stmt->close();
@@ -183,8 +212,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['request_revision'])) {
     $faculty_stmt->close();
     
     // Notify student
-    $student_notif = "Revision requested for your thesis \"" . $thesis_title . "\". Coordinator feedback: " . $revision_feedback;
-    $insert_student = "INSERT INTO notifications (user_id, thesis_id, message, type, is_read, created_at) VALUES (?, ?, ?, 'student_notif', 0, NOW())";
+    $student_notif = "📝 Revision requested for your thesis \"" . $thesis_title . "\". Coordinator feedback: " . $revision_feedback;
+    $insert_student = "INSERT INTO notifications (user_id, thesis_id, message, type, link, is_read, created_at) VALUES (?, ?, ?, 'student_notif', NULL, 0, NOW())";
     $student_stmt = $conn->prepare($insert_student);
     $student_stmt->bind_param("iis", $student_id, $thesis_id_post, $student_notif);
     $student_stmt->execute();

@@ -1,4 +1,4 @@
-<?php
+ <?php
 session_start();
 include("../config/db.php");
 
@@ -86,6 +86,11 @@ if ($check_thesis && $check_thesis->num_rows > 0) {
     $thesis_table_exists = true;
 }
 
+// ADD FORWARDED COLUMNS IF NOT EXISTS
+$conn->query("ALTER TABLE thesis_table ADD COLUMN IF NOT EXISTS is_forwarded_to_dean TINYINT DEFAULT 0");
+$conn->query("ALTER TABLE thesis_table ADD COLUMN IF NOT EXISTS forwarded_to_dean_date DATETIME NULL");
+$conn->query("ALTER TABLE thesis_table ADD COLUMN IF NOT EXISTS forwarded_by INT NULL");
+
 // CREATE NOTIFICATIONS TABLE IF NOT EXISTS
 $conn->query("CREATE TABLE IF NOT EXISTS notifications (
     notification_id INT AUTO_INCREMENT PRIMARY KEY,
@@ -121,8 +126,9 @@ while ($row = $notif_result->fetch_assoc()) {
 }
 $notif_list->close();
 
-// FUNCTION TO NOTIFY DEAN
-function notifyDean($conn, $thesis_id, $thesis_title, $student_name, $coordinator_name, $department_id) {
+// FUNCTION TO NOTIFY DEAN AND UPDATE THESIS
+function notifyDean($conn, $thesis_id, $thesis_title, $student_name, $coordinator_name, $department_id, $coordinator_id, $student_id) {
+    // Get department name
     $dept_name_query = "SELECT department_name FROM department_table WHERE department_id = ?";
     $dept_name_stmt = $conn->prepare($dept_name_query);
     $dept_name_stmt->bind_param("i", $department_id);
@@ -132,36 +138,47 @@ function notifyDean($conn, $thesis_id, $thesis_title, $student_name, $coordinato
     $dept_display = $dept['department_name'] ?? "Department";
     $dept_name_stmt->close();
     
-    $dean = null;
-    $role_ids = [2, 3, 4, 5];
-    
-    foreach ($role_ids as $role_id) {
-        $dean_query = "SELECT user_id FROM user_table WHERE role_id = ? AND department_id = ? LIMIT 1";
-        $dean_stmt = $conn->prepare($dean_query);
-        $dean_stmt->bind_param("ii", $role_id, $department_id);
-        $dean_stmt->execute();
-        $dean_result = $dean_stmt->get_result();
-        if ($dean_result && $dean_result->num_rows > 0) {
-            $dean = $dean_result->fetch_assoc();
-            $dean_stmt->close();
-            break;
-        }
-        $dean_stmt->close();
-    }
+    // Find DEAN with role_id = 4
+    $dean_query = "SELECT user_id FROM user_table WHERE role_id = 4 AND department_id = ? LIMIT 1";
+    $dean_stmt = $conn->prepare($dean_query);
+    $dean_stmt->bind_param("i", $department_id);
+    $dean_stmt->execute();
+    $dean_result = $dean_stmt->get_result();
+    $dean = $dean_result->fetch_assoc();
+    $dean_stmt->close();
     
     if ($dean) {
-        $message = "📋 Thesis ready for Dean approval: \"" . $thesis_title . "\" from student " . $student_name . ". Forwarded by Coordinator: " . $coordinator_name . " (" . $dept_display . " Department)";
-        $link = "../departmentDeanDashboard/reviewThesis.php?id=" . $thesis_id;
+        // UPDATE THESIS TABLE - MARK AS FORWARDED
+        $update_thesis = "UPDATE thesis_table SET is_forwarded_to_dean = 1, forwarded_to_dean_date = NOW(), forwarded_by = ? WHERE thesis_id = ?";
+        $update_stmt = $conn->prepare($update_thesis);
+        $update_stmt->bind_param("ii", $coordinator_id, $thesis_id);
+        $update_stmt->execute();
+        $update_stmt->close();
         
-        // FIXED: 6 placeholders, 6 bind variables
-        $insert = "INSERT INTO notifications (user_id, thesis_id, message, type, link, is_read, created_at) VALUES (?, ?, ?, ?, ?, 0, NOW())";
+        // Create notification message for dean
+        $message = "📋 Thesis ready for Dean approval: \"" . $thesis_title . "\" from student " . $student_name . ". Forwarded by Coordinator: " . $coordinator_name . " (" . $dept_display . " Department)";
+        $link = "reviewThesis.php?id=" . $thesis_id;
+        
+        $type_value = 'dean_forward';
+        $is_read_value = 0;
+        
+        $insert = "INSERT INTO notifications (user_id, thesis_id, message, type, link, is_read, created_at) VALUES (?, ?, ?, ?, ?, ?, NOW())";
         $stmt = $conn->prepare($insert);
-        $stmt->bind_param("iisss", $dean['user_id'], $thesis_id, $message, 'dean_forward', $link);
+        $stmt->bind_param("iisssi", $dean['user_id'], $thesis_id, $message, $type_value, $link, $is_read_value);
         $stmt->execute();
         $stmt->close();
-        return ['success' => true, 'department' => $dept_display];
+        
+        // Notify student
+        $student_notif = "📢 Your thesis \"" . $thesis_title . "\" has been forwarded to the " . $dept_display . " Dean for final approval by Coordinator " . $coordinator_name;
+        $student_insert = "INSERT INTO notifications (user_id, thesis_id, message, type, link, is_read, created_at) VALUES (?, ?, ?, 'student_notif', NULL, 0, NOW())";
+        $student_stmt = $conn->prepare($student_insert);
+        $student_stmt->bind_param("iis", $student_id, $thesis_id, $student_notif);
+        $student_stmt->execute();
+        $student_stmt->close();
+        
+        return ['success' => true, 'department' => $dept_display, 'dean_id' => $dean['user_id']];
     }
-    return ['success' => false, 'message' => 'No dean found'];
+    return ['success' => false, 'message' => 'No dean found for this department'];
 }
 
 // PROCESS FORWARD FORM
@@ -172,25 +189,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['forward_to_dean']) &&
     $thesis_id = intval($_POST['thesis_id']);
     $thesis_title = $_POST['thesis_title'] ?? '';
     $student_name = $_POST['student_name'] ?? '';
+    $department_code = $_POST['department_code'] ?? '';
+    $student_id_val = intval($_POST['student_id'] ?? 0);
     
-    $dept_query = "SELECT department_id FROM thesis_table WHERE thesis_id = ?";
-    $dept_stmt = $conn->prepare($dept_query);
-    $dept_stmt->bind_param("i", $thesis_id);
-    $dept_stmt->execute();
-    $dept_result = $dept_stmt->get_result();
-    $thesis_dept = $dept_result->fetch_assoc();
-    $department_id = $thesis_dept['department_id'] ?? null;
-    $dept_stmt->close();
+    // Get department_id from department_code
+    $dept_id_query = "SELECT department_id FROM department_table WHERE department_code = ?";
+    $dept_id_stmt = $conn->prepare($dept_id_query);
+    $dept_id_stmt->bind_param("s", $department_code);
+    $dept_id_stmt->execute();
+    $dept_id_result = $dept_id_stmt->get_result();
+    $dept_id_row = $dept_id_result->fetch_assoc();
+    $department_id = $dept_id_row['department_id'] ?? null;
+    $dept_id_stmt->close();
+    
+    if (empty($department_id)) {
+        // Try to get from thesis_table
+        $dept_query = "SELECT department_id, student_id FROM thesis_table WHERE thesis_id = ?";
+        $dept_stmt = $conn->prepare($dept_query);
+        $dept_stmt->bind_param("i", $thesis_id);
+        $dept_stmt->execute();
+        $dept_result = $dept_stmt->get_result();
+        $thesis_dept = $dept_result->fetch_assoc();
+        $department_id = $thesis_dept['department_id'] ?? null;
+        $student_id_val = $thesis_dept['student_id'] ?? $student_id_val;
+        $dept_stmt->close();
+    }
     
     if (empty($department_id)) {
         $forward_success = false;
         $forward_message = 'Thesis has no department assigned';
     } else {
-        $result = notifyDean($conn, $thesis_id, $thesis_title, $student_name, $fullName, $department_id);
+        $result = notifyDean($conn, $thesis_id, $thesis_title, $student_name, $fullName, $department_id, $user_id, $student_id_val);
         
         if ($result['success']) {
             $forward_success = true;
-            $forward_message = '✓ Thesis forwarded to ' . $result['department'] . ' Dean';
+            $forward_message = '✓ Thesis forwarded to ' . $result['department'] . ' Dean successfully!';
         } else {
             $forward_success = false;
             $forward_message = '✗ ' . $result['message'];
@@ -198,10 +231,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['forward_to_dean']) &&
     }
 }
 
-// GET DEPARTMENT COUNTS
+// GET DEPARTMENT COUNTS (ONLY NON-FORWARDED THESES)
 $dept_counts = [];
 if ($thesis_table_exists) {
-    $dept_query = "SELECT department_id, COUNT(*) as count FROM thesis_table WHERE (is_archived = 0 OR is_archived IS NULL) GROUP BY department_id";
+    $dept_query = "SELECT department_id, COUNT(*) as count FROM thesis_table WHERE (is_archived = 0 OR is_archived IS NULL) AND (is_forwarded_to_dean = 0 OR is_forwarded_to_dean IS NULL) GROUP BY department_id";
     $dept_result = $conn->query($dept_query);
     if ($dept_result && $dept_result->num_rows > 0) {
         while ($row = $dept_result->fetch_assoc()) {
@@ -215,18 +248,19 @@ if ($thesis_table_exists) {
 $total_theses = array_sum($dept_counts);
 $max_dept_count = max(array_values($dept_counts) ?: [1]);
 
-// GET PENDING THESES
+// GET PENDING THESES (ONLY NON-FORWARDED THESES)
 $pending_theses_by_dept = [];
 foreach ($all_departments as $dept_id => $dept_info) {
     $pending_theses_by_dept[$dept_info['code']] = [];
 }
 
 if ($thesis_table_exists) {
-    $pending_query = "SELECT t.*, u.first_name, u.last_name, d.department_code, d.department_name
+    $pending_query = "SELECT t.*, u.first_name, u.last_name, u.user_id as student_id, d.department_code, d.department_name, d.department_id
                       FROM thesis_table t
                       JOIN user_table u ON t.student_id = u.user_id
                       LEFT JOIN department_table d ON t.department_id = d.department_id
                       WHERE (t.is_archived = 0 OR t.is_archived IS NULL)
+                      AND (t.is_forwarded_to_dean = 0 OR t.is_forwarded_to_dean IS NULL)
                       ORDER BY t.date_submitted DESC";
     $pending_result = $conn->query($pending_query);
     
@@ -283,7 +317,7 @@ $pageTitle = "Coordinator Dashboard";
             <i class="fas <?= $forward_success ? 'fa-check-circle' : 'fa-exclamation-circle' ?>"></i>
         </div>
         <p style="margin-bottom:20px;font-size:16px;"><?= htmlspecialchars($forward_message) ?></p>
-        <button onclick="document.getElementById('messageModal').style.display='none';window.history.replaceState({},document.title,window.location.pathname);" style="background:#3b82f6;color:white;border:none;padding:10px 30px;border-radius:8px;cursor:pointer;">OK</button>
+        <button onclick="document.getElementById('messageModal').style.display='none';window.location.href='coordinatorDashboard.php';" style="background:#3b82f6;color:white;border:none;padding:10px 30px;border-radius:8px;cursor:pointer;">OK</button>
     </div>
 </div>
 <?php endif; ?>
@@ -300,7 +334,7 @@ $pageTitle = "Coordinator Dashboard";
             <div class="notification-icon" id="notificationIcon">
                 <i class="far fa-bell"></i>
                 <?php if($notificationCount>0):?>
-                <span class="notification-badge"><?=$notificationCount?></span>
+                <span class="notification-badge"><?= $notificationCount ?></span>
                 <?php endif;?>
             </div>
             <div class="notification-dropdown" id="notificationDropdown">
@@ -315,11 +349,11 @@ $pageTitle = "Coordinator Dashboard";
                     <div class="notification-item empty">No notifications</div>
                     <?php else:?>
                         <?php foreach($recentNotifications as $notif):?>
-                        <div class="notification-item <?=$notif['is_read']==0?'unread':''?>" 
-                             data-id="<?=$notif['notification_id']?>" 
-                             data-link="<?=htmlspecialchars($notif['link'] ?? '#')?>">
-                            <div class="notif-message"><?=htmlspecialchars($notif['message'])?></div>
-                            <div class="notif-time"><?=date('M d, Y h:i A',strtotime($notif['created_at']))?></div>
+                        <div class="notification-item <?= $notif['is_read']==0?'unread':'' ?>" 
+                             data-id="<?= $notif['notification_id'] ?>" 
+                             data-link="<?= htmlspecialchars($notif['link'] ?? '#') ?>">
+                            <div class="notif-message"><?= htmlspecialchars($notif['message']) ?></div>
+                            <div class="notif-time"><?= date('M d, Y h:i A',strtotime($notif['created_at'])) ?></div>
                         </div>
                         <?php endforeach;?>
                     <?php endif;?>
@@ -328,7 +362,7 @@ $pageTitle = "Coordinator Dashboard";
             </div>
         </div>
         <div class="profile-wrapper" id="profileWrapper">
-            <div class="profile-trigger"><span class="profile-name"><?=htmlspecialchars($fullName)?></span><div class="profile-avatar"><?=htmlspecialchars($initials)?></div></div>
+            <div class="profile-trigger"><span class="profile-name"><?= htmlspecialchars($fullName) ?></span><div class="profile-avatar"><?= htmlspecialchars($initials) ?></div></div>
             <div class="profile-dropdown" id="profileDropdown"><a href="profile.php"><i class="fas fa-user"></i> Profile</a><hr><a href="/ArchivingThesis/authentication/logout.php"><i class="fas fa-sign-out-alt"></i> Logout</a></div>
         </div>
     </div>
@@ -352,19 +386,19 @@ $pageTitle = "Coordinator Dashboard";
     <div class="welcome-banner">
         <div class="welcome-info">
             <h1>Coordinator Dashboard</h1>
-            <p>Welcome back, <?=htmlspecialchars($first_name)?>!</p>
+            <p>Welcome back, <?= htmlspecialchars($first_name) ?>!</p>
         </div>
         <div class="coordinator-info">
-            <div class="coordinator-name"><?=htmlspecialchars($fullName)?></div>
-            <div class="coordinator-position"><?=$position?></div>
-            <div class="coordinator-since">Since <?=$assigned_date?></div>
+            <div class="coordinator-name"><?= htmlspecialchars($fullName) ?></div>
+            <div class="coordinator-position"><?= $position ?></div>
+            <div class="coordinator-since">Since <?= $assigned_date ?></div>
         </div>
     </div>
     
     <div class="stats-grid">
-        <div class="stat-card"><div class="stat-icon"><i class="fas fa-file-alt"></i></div><div class="stat-content"><h3><?=number_format($total_theses)?></h3><p>Total Theses</p></div></div>
-        <div class="stat-card"><div class="stat-icon"><i class="fas fa-clock"></i></div><div class="stat-content"><h3><?=number_format($total_pending)?></h3><p>Pending Review</p></div></div>
-        <div class="stat-card"><div class="stat-icon"><i class="fas fa-archive"></i></div><div class="stat-content"><h3><?=number_format($total_theses-$total_pending)?></h3><p>Archived</p></div></div>
+        <div class="stat-card"><div class="stat-icon"><i class="fas fa-file-alt"></i></div><div class="stat-content"><h3><?= number_format($total_theses) ?></h3><p>Total Theses</p></div></div>
+        <div class="stat-card"><div class="stat-icon"><i class="fas fa-clock"></i></div><div class="stat-content"><h3><?= number_format($total_pending) ?></h3><p>Pending Review</p></div></div>
+        <div class="stat-card"><div class="stat-icon"><i class="fas fa-archive"></i></div><div class="stat-content"><h3><?= number_format($total_theses - $total_pending) ?></h3><p>Archived</p></div></div>
     </div>
     
     <div class="chart-card">
@@ -378,17 +412,17 @@ $pageTitle = "Coordinator Dashboard";
                 $color = isset($dept_colors[$code]) ? $dept_colors[$code] : '#6c757d';
                 $icon = isset($dept_icons[$code]) ? $dept_icons[$code] : 'fa-building';
             ?>
-            <div class="dept-card" data-dept="<?=$code?>">
-                <div class="dept-card-icon" style="background:<?=$color?>20;"><i class="fas <?=$icon?>" style="color:<?=$color?>"></i></div>
+            <div class="dept-card" data-dept="<?= $code ?>">
+                <div class="dept-card-icon" style="background:<?= $color ?>20;"><i class="fas <?= $icon ?>" style="color:<?= $color ?>"></i></div>
                 <div class="dept-card-content">
-                    <h4><?=htmlspecialchars($name)?></h4>
-                    <div class="dept-card-stats"><span class="dept-card-count"><?=$count?></span><span class="dept-card-label">Theses</span></div>
-                    <div class="progress-bar-small"><div class="progress-fill-small" style="width:<?=$percentage?>%;background:<?=$color?>"></div></div>
+                    <h4><?= htmlspecialchars($name) ?></h4>
+                    <div class="dept-card-stats"><span class="dept-card-count"><?= $count ?></span><span class="dept-card-label">Theses</span></div>
+                    <div class="progress-bar-small"><div class="progress-fill-small" style="width:<?= $percentage ?>%;background:<?= $color ?>"></div></div>
                 </div>
             </div>
             <?php endforeach;?>
         </div>
-        <div class="dept-total-footer"><strong>Total Theses: <?=$total_theses?></strong></div>
+        <div class="dept-total-footer"><strong>Total Theses: <?= $total_theses ?></strong></div>
     </div>
     
     <!-- Theses Ready for Dean Forwarding -->
@@ -408,33 +442,34 @@ $pageTitle = "Coordinator Dashboard";
             $color = isset($dept_colors[$code]) ? $dept_colors[$code] : '#6c757d';
             $icon = isset($dept_icons[$code]) ? $dept_icons[$code] : 'fa-building';
         ?>
-        <div class="dept-section" data-dept="<?=$code?>">
+        <div class="dept-section" data-dept="<?= $code ?>">
             <div class="dept-section-header">
-                <span class="dept-dot" style="background:<?=$color?>"></span>
-                <h4><?=htmlspecialchars($name)?></h4>
-                <span class="badge"><?=count($dept_theses)?> theses</span>
+                <span class="dept-dot" style="background:<?= $color ?>"></span>
+                <h4><?= htmlspecialchars($name) ?></h4>
+                <span class="badge"><?= count($dept_theses) ?> theses</span>
             </div>
             <div class="dept-section-content">
                 <?php foreach($dept_theses as $thesis):?>
                 <div class="thesis-item">
                     <div class="thesis-info">
-                        <div class="thesis-title"><?=htmlspecialchars($thesis['title'])?></div>
+                        <div class="thesis-title"><?= htmlspecialchars($thesis['title']) ?></div>
                         <div class="thesis-meta">
-                            <span><i class="fas fa-user"></i> <?=htmlspecialchars($thesis['first_name'].' '.$thesis['last_name'])?></span>
-                            <span><i class="fas fa-calendar"></i> <?=date('M d, Y',strtotime($thesis['date_submitted']))?></span>
-                            <span class="dept-badge" style="background:<?=$color?>20; color:<?=$color?>; padding:2px 8px; border-radius:12px; font-size:0.65rem;">
-                                <i class="fas <?=$icon?>"></i> <?=htmlspecialchars($code)?>
+                            <span><i class="fas fa-user"></i> <?= htmlspecialchars($thesis['first_name'] . ' ' . $thesis['last_name']) ?></span>
+                            <span><i class="fas fa-calendar"></i> <?= date('M d, Y', strtotime($thesis['date_submitted'])) ?></span>
+                            <span class="dept-badge" style="background:<?= $color ?>20; color:<?= $color ?>; padding:2px 8px; border-radius:12px; font-size:0.65rem;">
+                                <i class="fas <?= $icon ?>"></i> <?= htmlspecialchars($code) ?>
                             </span>
                         </div>
                     </div>
-                    <form method="POST" style="display:inline;" onsubmit="return confirm('Forward thesis \"<?=addslashes(htmlspecialchars($thesis['title']))?>\" to the <?=$code?> Dean?')">
+                    <form method="POST" style="display:inline;" onsubmit="return confirm('Forward thesis \"<?= addslashes(htmlspecialchars($thesis['title'])) ?>\" to the <?= $code ?> Dean? This will remove it from your pending list.')">
                         <input type="hidden" name="forward_to_dean" value="1">
-                        <input type="hidden" name="thesis_id" value="<?=$thesis['thesis_id']?>">
-                        <input type="hidden" name="thesis_title" value="<?=htmlspecialchars($thesis['title'])?>">
-                        <input type="hidden" name="student_name" value="<?=htmlspecialchars($thesis['first_name'].' '.$thesis['last_name'])?>">
-                        <input type="hidden" name="department_code" value="<?=$code?>">
+                        <input type="hidden" name="thesis_id" value="<?= $thesis['thesis_id'] ?>">
+                        <input type="hidden" name="thesis_title" value="<?= htmlspecialchars($thesis['title']) ?>">
+                        <input type="hidden" name="student_name" value="<?= htmlspecialchars($thesis['first_name'] . ' ' . $thesis['last_name']) ?>">
+                        <input type="hidden" name="student_id" value="<?= $thesis['student_id'] ?>">
+                        <input type="hidden" name="department_code" value="<?= $code ?>">
                         <button type="submit" class="btn-forward">
-                            <i class="fas fa-paper-plane"></i> Forward to <?=$code?> Dean
+                            <i class="fas fa-paper-plane"></i> Forward to <?= $code ?> Dean
                         </button>
                     </form>
                 </div>
@@ -464,21 +499,21 @@ $pageTitle = "Coordinator Dashboard";
         ?>
         <div class="dept-section">
             <div class="dept-section-header">
-                <span class="dept-dot" style="background:<?=$color?>"></span>
-                <h4><?=htmlspecialchars($name)?></h4>
-                <span class="badge"><?=count($dept_theses)?> waiting</span>
+                <span class="dept-dot" style="background:<?= $color ?>"></span>
+                <h4><?= htmlspecialchars($name) ?></h4>
+                <span class="badge"><?= count($dept_theses) ?> waiting</span>
             </div>
             <div class="dept-section-content">
                 <?php foreach($dept_theses as $thesis):?>
                 <div class="thesis-item">
                     <div class="thesis-info">
-                        <div class="thesis-title"><?=htmlspecialchars($thesis['title'])?></div>
+                        <div class="thesis-title"><?= htmlspecialchars($thesis['title']) ?></div>
                         <div class="thesis-meta">
-                            <span><i class="fas fa-user"></i> <?=htmlspecialchars($thesis['first_name'].' '.$thesis['last_name'])?></span>
-                            <span><i class="fas fa-calendar"></i> <?=date('M d, Y',strtotime($thesis['date_submitted']))?></span>
+                            <span><i class="fas fa-user"></i> <?= htmlspecialchars($thesis['first_name']) ?> <?= htmlspecialchars($thesis['last_name']) ?></span>
+                            <span><i class="fas fa-calendar"></i> <?= date('M d, Y', strtotime($thesis['date_submitted'])) ?></span>
                         </div>
                     </div>
-                    <a href="reviewThesis.php?id=<?=$thesis['thesis_id']?>" class="review-btn"><i class="fas fa-chevron-right"></i> Review</a>
+                    <a href="reviewThesis.php?id=<?= $thesis['thesis_id'] ?>" class="review-btn"><i class="fas fa-chevron-right"></i> Review</a>
                 </div>
                 <?php endforeach;?>
             </div>

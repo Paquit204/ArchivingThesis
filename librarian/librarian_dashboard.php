@@ -1,4 +1,4 @@
-<?php
+ <?php
 session_start();
 include("../config/db.php");
 
@@ -84,7 +84,38 @@ while ($row = $notif_result->fetch_assoc()) {
 }
 $notif_list->close();
 
-// MARK NOTIFICATION AS READ
+// MARK NOTIFICATION AS READ AND REDIRECT (GET request - for clicking notifications)
+if (isset($_GET['mark_read']) && isset($_GET['notif_id'])) {
+    $notif_id = intval($_GET['notif_id']);
+    $get_link_query = "SELECT link, thesis_id FROM notifications WHERE notification_id = ? AND user_id = ?";
+    $link_stmt = $conn->prepare($get_link_query);
+    $link_stmt->bind_param("ii", $notif_id, $user_id);
+    $link_stmt->execute();
+    $link_result = $link_stmt->get_result();
+    $redirect_link = 'librarian_dashboard.php';
+    
+    if ($notif_row = $link_result->fetch_assoc()) {
+        // Mark as read
+        $update_query = "UPDATE notifications SET is_read = 1 WHERE notification_id = ? AND user_id = ?";
+        $update_stmt = $conn->prepare($update_query);
+        $update_stmt->bind_param("ii", $notif_id, $user_id);
+        $update_stmt->execute();
+        $update_stmt->close();
+        
+        // Determine redirect link
+        if ($notif_row['thesis_id'] > 0) {
+            $redirect_link = 'view_thesis.php?id=' . $notif_row['thesis_id'];
+        } elseif (!empty($notif_row['link'])) {
+            $redirect_link = $notif_row['link'];
+        }
+    }
+    $link_stmt->close();
+    
+    header("Location: " . $redirect_link);
+    exit;
+}
+
+// MARK NOTIFICATION AS READ (AJAX - for single notification)
 if (isset($_POST['mark_read']) && isset($_POST['notif_id'])) {
     $notif_id = intval($_POST['notif_id']);
     $update_query = "UPDATE notifications SET is_read = 1 WHERE notification_id = ? AND user_id = ?";
@@ -92,18 +123,30 @@ if (isset($_POST['mark_read']) && isset($_POST['notif_id'])) {
     $update_stmt->bind_param("ii", $notif_id, $user_id);
     $update_stmt->execute();
     $update_stmt->close();
-    echo json_encode(['success' => true]);
+    
+    // Get updated count
+    $count_stmt = $conn->prepare("SELECT COUNT(*) as c FROM notifications WHERE user_id = ? AND is_read = 0");
+    $count_stmt->bind_param("i", $user_id);
+    $count_stmt->execute();
+    $count_result = $count_stmt->get_result();
+    $new_count = 0;
+    if ($count_row = $count_result->fetch_assoc()) {
+        $new_count = $count_row['c'];
+    }
+    $count_stmt->close();
+    
+    echo json_encode(['success' => true, 'new_count' => $new_count]);
     exit;
 }
 
-// MARK ALL NOTIFICATIONS AS READ
+// MARK ALL NOTIFICATIONS AS READ (AJAX)
 if (isset($_POST['mark_all_read'])) {
     $update_query = "UPDATE notifications SET is_read = 1 WHERE user_id = ?";
     $update_stmt = $conn->prepare($update_query);
     $update_stmt->bind_param("i", $user_id);
     $update_stmt->execute();
     $update_stmt->close();
-    echo json_encode(['success' => true]);
+    echo json_encode(['success' => true, 'new_count' => 0]);
     exit;
 }
 
@@ -123,26 +166,26 @@ $dept_colors = [
 ];
 $default_color = '#6b7280';
 
-// ==================== GET PENDING THESES (DEPARTMENT EXCLUSIVE) ====================
+// ==================== GET PENDING THESES ====================
 $pending_theses = [];
 if ($librarian_department_id) {
-    // Librarian with specific department - only see theses from that department
     $pending_query = "SELECT t.*, u.first_name, u.last_name, u.email, d.department_name, d.department_code
                       FROM thesis_table t
                       JOIN user_table u ON t.student_id = u.user_id
                       LEFT JOIN department_table d ON t.department_id = d.department_id
                       WHERE (t.is_archived = 0 OR t.is_archived IS NULL)
+                      AND t.status = 'approved_by_dean'
                       AND t.department_id = ?
                       ORDER BY t.date_submitted DESC";
     $pending_stmt = $conn->prepare($pending_query);
     $pending_stmt->bind_param("i", $librarian_department_id);
 } else {
-    // Librarian with no department (all departments)
     $pending_query = "SELECT t.*, u.first_name, u.last_name, u.email, d.department_name, d.department_code
                       FROM thesis_table t
                       JOIN user_table u ON t.student_id = u.user_id
                       LEFT JOIN department_table d ON t.department_id = d.department_id
                       WHERE (t.is_archived = 0 OR t.is_archived IS NULL)
+                      AND t.status = 'approved_by_dean'
                       ORDER BY t.date_submitted DESC";
     $pending_stmt = $conn->prepare($pending_query);
 }
@@ -176,7 +219,7 @@ $selected_department_code = isset($_GET['department']) ? $_GET['department'] : '
 $selected_year = isset($_GET['year']) ? $_GET['year'] : '';
 $selected_sort = isset($_GET['sort']) ? $_GET['sort'] : 'date_desc';
 
-// ==================== GET ARCHIVED THESES (DEPARTMENT EXCLUSIVE) ====================
+// ==================== GET ARCHIVED THESES ====================
 $archived_query = "SELECT t.*, u.first_name, u.last_name, u.email, d.department_name, d.department_code
                     FROM thesis_table t
                     JOIN user_table u ON t.student_id = u.user_id
@@ -255,10 +298,15 @@ $pageTitle = "Librarian Dashboard";
 
     <header class="top-nav">
         <div class="nav-left">
-            <button class="hamburger" id="hamburgerBtn"><span></span><span></span><span></span></button>
+            <button class="hamburger" id="hamburgerBtn">
+                <span></span>
+                <span></span>
+                <span></span>
+            </button>
             <div class="logo">Thesis<span>Manager</span></div>
         </div>
         <div class="nav-right">
+            <!-- Notification Bell - Fixed Position -->
             <div class="notification-container">
                 <div class="notification-icon" id="notificationIcon">
                     <i class="far fa-bell"></i>
@@ -268,41 +316,88 @@ $pageTitle = "Librarian Dashboard";
                 </div>
                 <div class="notification-dropdown" id="notificationDropdown">
                     <div class="notification-header">
-                        <h3>Notifications</h3>
+                        <h3><i class="fas fa-bell"></i> Notifications</h3>
                         <?php if ($notificationCount > 0): ?>
                             <button class="mark-all-read" id="markAllReadBtn">Mark all as read</button>
                         <?php endif; ?>
                     </div>
                     <div class="notification-list" id="notificationList">
                         <?php if (empty($recentNotifications)): ?>
-                            <div class="notification-item empty"><div class="notif-icon"><i class="far fa-bell-slash"></i></div><div class="notif-content"><div class="notif-message">No notifications yet</div></div></div>
+                            <div class="notification-item empty">
+                                <div class="notif-icon"><i class="far fa-bell-slash"></i></div>
+                                <div class="notif-content">
+                                    <div class="notif-message">No notifications yet</div>
+                                </div>
+                            </div>
                         <?php else: ?>
                             <?php foreach ($recentNotifications as $notif): ?>
-                                <?php $link = ($notif['thesis_id'] > 0) ? 'view_thesis.php?id=' . $notif['thesis_id'] : ($notif['link'] ?? 'librarian_dashboard.php'); ?>
-                                <a href="<?= htmlspecialchars($link) ?>" class="notification-item <?= $notif['is_read'] == 0 ? 'unread' : '' ?>" data-id="<?= $notif['notification_id'] ?>" data-link="<?= htmlspecialchars($link) ?>">
-                                    <div class="notif-icon"><?php if(strpos($notif['message'], 'archive') !== false): ?><i class="fas fa-archive"></i><?php elseif(strpos($notif['message'], 'approved') !== false): ?><i class="fas fa-check-circle"></i><?php else: ?><i class="fas fa-bell"></i><?php endif; ?></div>
-                                    <div class="notif-content"><div class="notif-message"><?= htmlspecialchars($notif['message']) ?></div><div class="notif-time"><i class="far fa-clock"></i> <?php echo date('M d, Y h:i A', strtotime($notif['created_at'])); ?></div></div>
+                                <a href="?mark_read=1&notif_id=<?= $notif['notification_id'] ?>" class="notification-item <?= $notif['is_read'] == 0 ? 'unread' : '' ?>" data-id="<?= $notif['notification_id'] ?>" data-thesis-id="<?= $notif['thesis_id'] ?>">
+                                    <div class="notif-icon">
+                                        <?php if(strpos($notif['message'], 'archive') !== false): ?>
+                                            <i class="fas fa-archive"></i>
+                                        <?php elseif(strpos($notif['message'], 'approved') !== false): ?>
+                                            <i class="fas fa-check-circle"></i>
+                                        <?php else: ?>
+                                            <i class="fas fa-bell"></i>
+                                        <?php endif; ?>
+                                    </div>
+                                    <div class="notif-content">
+                                        <div class="notif-message"><?= htmlspecialchars($notif['message']) ?></div>
+                                        <div class="notif-time"><i class="far fa-clock"></i> <?php echo date('M d, Y h:i A', strtotime($notif['created_at'])); ?></div>
+                                    </div>
                                 </a>
                             <?php endforeach; ?>
                         <?php endif; ?>
                     </div>
-                    <div class="notification-footer"><a href="notifications.php">View all notifications <i class="fas fa-arrow-right"></i></a></div>
+                    <div class="notification-footer">
+                        <a href="notifications.php">View all notifications <i class="fas fa-arrow-right"></i></a>
+                    </div>
                 </div>
             </div>
+
+            <!-- Profile -->
             <div class="profile-wrapper" id="profileWrapper">
-                <div class="profile-trigger"><span class="profile-name"><?= htmlspecialchars($fullName) ?></span><div class="profile-avatar"><?= htmlspecialchars($initials) ?></div></div>
-                <div class="profile-dropdown" id="profileDropdown"><a href="librarian_profile.php"><i class="fas fa-user"></i> Profile</a><hr><a href="/ArchivingThesis/authentication/logout.php"><i class="fas fa-sign-out-alt"></i> Logout</a></div>
+                <div class="profile-trigger">
+                    <span class="profile-name"><?= htmlspecialchars($fullName) ?></span>
+                    <div class="profile-avatar"><?= htmlspecialchars($initials) ?></div>
+                </div>
+                <div class="profile-dropdown" id="profileDropdown">
+                    <a href="librarian_profile.php"><i class="fas fa-user"></i> Profile</a>
+                    <hr>
+                    <a href="/ArchivingThesis/authentication/logout.php"><i class="fas fa-sign-out-alt"></i> Logout</a>
+                </div>
             </div>
         </div>
     </header>
 
     <aside class="sidebar" id="sidebar">
-        <div class="logo-container"><div class="logo">Thesis<span>Manager</span></div><div class="logo-sub">LIBRARIAN</div></div>
-        <div class="nav-menu">
-            <a href="librarian_dashboard.php" class="nav-item active"><i class="fas fa-th-large"></i><span>Dashboard</span></a>
-            <a href="archived_list.php" class="nav-item"><i class="fas fa-folder-open"></i><span>Archived List</span></a>
+        <div class="logo-container">
+            <div class="logo">Thesis<span>Manager</span></div>
+            <div class="logo-sub">LIBRARIAN</div>
         </div>
-        <div class="nav-footer"><a href="/ArchivingThesis/authentication/logout.php" class="logout-btn"><i class="fas fa-sign-out-alt"></i><span>Logout</span></a></div>
+        <div class="nav-menu">
+            <a href="librarian_dashboard.php" class="nav-item active">
+                <i class="fas fa-th-large"></i>
+                <span>Dashboard</span>
+            </a>
+            <a href="archived_list.php" class="nav-item">
+                <i class="fas fa-folder-open"></i>
+                <span>Archived List</span>
+            </a>
+        </div>
+        <div class="nav-footer">
+            <div class="theme-toggle">
+                <input type="checkbox" id="darkmode">
+                <label for="darkmode" class="toggle-label">
+                    <i class="fas fa-sun"></i>
+                    <i class="fas fa-moon"></i>
+                </label>
+            </div>
+            <a href="/ArchivingThesis/authentication/logout.php" class="logout-btn">
+                <i class="fas fa-sign-out-alt"></i>
+                <span>Logout</span>
+            </a>
+        </div>
     </aside>
 
     <main class="main-content">
@@ -311,31 +406,64 @@ $pageTitle = "Librarian Dashboard";
                 <h1>Librarian Dashboard</h1>
                 <p>Manage and archive approved theses</p>
                 <?php if ($librarian_department_id): ?>
-                    <p class="dept-badge" style="margin-top: 8px; font-size: 0.8rem;"><i class="fas fa-building"></i> Managing: <?= htmlspecialchars($librarian_department_name) ?> (<?= htmlspecialchars($librarian_department_code) ?>)</p>
+                    <p class="dept-badge"><i class="fas fa-building"></i> Managing: <?= htmlspecialchars($librarian_department_name) ?> (<?= htmlspecialchars($librarian_department_code) ?>)</p>
                 <?php else: ?>
-                    <p class="dept-badge" style="margin-top: 8px; font-size: 0.8rem;"><i class="fas fa-globe"></i> Managing: All Departments</p>
+                    <p class="dept-badge"><i class="fas fa-globe"></i> Managing: All Departments</p>
                 <?php endif; ?>
             </div>
-            <div class="librarian-details"><div class="librarian-name"><?= htmlspecialchars($fullName) ?></div><div class="librarian-since">Librarian since <?= htmlspecialchars($librarian_since) ?></div></div>
+            <div class="librarian-details">
+                <div class="librarian-name"><?= htmlspecialchars($fullName) ?></div>
+                <div class="librarian-since">Librarian since <?= htmlspecialchars($librarian_since) ?></div>
+            </div>
         </div>
 
         <div class="stats-grid">
-            <div class="stat-card"><div class="stat-icon"><i class="fas fa-clock"></i></div><div class="stat-details"><h3><?= number_format($stats['pending_archive']) ?></h3><p>Pending Archive</p></div></div>
-            <div class="stat-card"><div class="stat-icon"><i class="fas fa-archive"></i></div><div class="stat-details"><h3><?= number_format($stats['archived']) ?></h3><p>Archived Theses</p></div></div>
-            <div class="stat-card"><div class="stat-icon"><i class="fas fa-book"></i></div><div class="stat-details"><h3><?= number_format($stats['total_archived']) ?></h3><p>Total Archived</p></div></div>
+            <div class="stat-card">
+                <div class="stat-icon"><i class="fas fa-clock"></i></div>
+                <div class="stat-details">
+                    <h3><?= number_format($stats['pending_archive']) ?></h3>
+                    <p>Pending Archive</p>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon"><i class="fas fa-archive"></i></div>
+                <div class="stat-details">
+                    <h3><?= number_format($stats['archived']) ?></h3>
+                    <p>Archived Theses</p>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon"><i class="fas fa-book"></i></div>
+                <div class="stat-details">
+                    <h3><?= number_format($stats['total_archived']) ?></h3>
+                    <p>Total Archived</p>
+                </div>
+            </div>
         </div>
 
         <div class="pending-card">
             <h3><i class="fas fa-clock"></i> Theses Pending for Archiving (<?= count($pending_theses) ?>)</h3>
             <?php if (empty($pending_theses)): ?>
-                <div class="empty-state"><i class="fas fa-check-circle"></i><p>No pending theses for archiving</p></div>
+                <div class="empty-state">
+                    <i class="fas fa-check-circle"></i>
+                    <p>No pending theses for archiving</p>
+                </div>
             <?php else: ?>
                 <?php if ($librarian_department_id): ?>
                     <div class="pending-dept-list">
                         <?php foreach ($pending_theses as $thesis): ?>
                         <div class="pending-item">
-                            <div class="pending-info"><div class="pending-title"><?= htmlspecialchars($thesis['title']) ?></div><div class="pending-meta"><span><i class="fas fa-user"></i> <?= htmlspecialchars($thesis['first_name'] . ' ' . $thesis['last_name']) ?></span><span><i class="fas fa-calendar"></i> <?= date('M d, Y', strtotime($thesis['date_submitted'])) ?></span></div></div>
-                            <div class="button-group"><a href="view_thesis.php?id=<?= $thesis['thesis_id'] ?>" class="btn-view"><i class="fas fa-eye"></i> View</a><button type="button" class="btn-archive" onclick="openArchiveModal(<?= $thesis['thesis_id'] ?>)"><i class="fas fa-archive"></i> Archive</button></div>
+                            <div class="pending-info">
+                                <div class="pending-title"><?= htmlspecialchars($thesis['title']) ?></div>
+                                <div class="pending-meta">
+                                    <span><i class="fas fa-user"></i> <?= htmlspecialchars($thesis['first_name'] . ' ' . $thesis['last_name']) ?></span>
+                                    <span><i class="fas fa-calendar"></i> <?= date('M d, Y', strtotime($thesis['date_submitted'])) ?></span>
+                                </div>
+                            </div>
+                            <div class="button-group">
+                                <a href="view_thesis.php?id=<?= $thesis['thesis_id'] ?>" class="btn-view"><i class="fas fa-eye"></i> View</a>
+                                <button type="button" class="btn-archive" onclick="openArchiveModal(<?= $thesis['thesis_id'] ?>)"><i class="fas fa-archive"></i> Archive</button>
+                            </div>
                         </div>
                         <?php endforeach; ?>
                     </div>
@@ -344,12 +472,25 @@ $pageTitle = "Librarian Dashboard";
                         $dept_color = $dept_colors[$dept_code] ?? $default_color;
                     ?>
                     <div class="pending-dept-section">
-                        <div class="pending-dept-header"><span class="pending-dept-dot" style="background: <?= $dept_color ?>;"></span><h4><?= htmlspecialchars($dept_code) ?></h4><span class="pending-dept-badge"><?= count($theses) ?> pending</span></div>
+                        <div class="pending-dept-header">
+                            <span class="pending-dept-dot" style="background: <?= $dept_color ?>;"></span>
+                            <h4><?= htmlspecialchars($dept_code) ?></h4>
+                            <span class="pending-dept-badge"><?= count($theses) ?> pending</span>
+                        </div>
                         <div class="pending-dept-list">
                             <?php foreach ($theses as $thesis): ?>
                             <div class="pending-item">
-                                <div class="pending-info"><div class="pending-title"><?= htmlspecialchars($thesis['title']) ?></div><div class="pending-meta"><span><i class="fas fa-user"></i> <?= htmlspecialchars($thesis['first_name'] . ' ' . $thesis['last_name']) ?></span><span><i class="fas fa-calendar"></i> <?= date('M d, Y', strtotime($thesis['date_submitted'])) ?></span></div></div>
-                                <div class="button-group"><a href="view_thesis.php?id=<?= $thesis['thesis_id'] ?>" class="btn-view"><i class="fas fa-eye"></i> View</a><button type="button" class="btn-archive" onclick="openArchiveModal(<?= $thesis['thesis_id'] ?>)"><i class="fas fa-archive"></i> Archive</button></div>
+                                <div class="pending-info">
+                                    <div class="pending-title"><?= htmlspecialchars($thesis['title']) ?></div>
+                                    <div class="pending-meta">
+                                        <span><i class="fas fa-user"></i> <?= htmlspecialchars($thesis['first_name'] . ' ' . $thesis['last_name']) ?></span>
+                                        <span><i class="fas fa-calendar"></i> <?= date('M d, Y', strtotime($thesis['date_submitted'])) ?></span>
+                                    </div>
+                                </div>
+                                <div class="button-group">
+                                    <a href="view_thesis.php?id=<?= $thesis['thesis_id'] ?>" class="btn-view"><i class="fas fa-eye"></i> View</a>
+                                    <button type="button" class="btn-archive" onclick="openArchiveModal(<?= $thesis['thesis_id'] ?>)"><i class="fas fa-archive"></i> Archive</button>
+                                </div>
                             </div>
                             <?php endforeach; ?>
                         </div>
@@ -360,12 +501,11 @@ $pageTitle = "Librarian Dashboard";
         </div>
 
         <div class="filter-bar">
-            <form method="GET" action="" style="display: flex; flex-wrap: wrap; gap: 15px; align-items: center; width: 100%;">
+            <form method="GET" action="">
                 <?php if (!$librarian_department_id): ?>
                 <select name="department" class="filter-select" onchange="this.form.submit()">
                     <option value="">All Departments</option>
                     <?php 
-                    // FIXED: Check if $departments array has data before looping
                     if (!empty($departments) && is_array($departments)):
                         foreach ($departments as $dept): 
                             $dept_code = isset($dept['department_code']) ? $dept['department_code'] : '';
@@ -374,10 +514,8 @@ $pageTitle = "Librarian Dashboard";
                         <option value="<?= htmlspecialchars($dept_code) ?>" <?= $selected_department_code == $dept_code ? 'selected' : '' ?>><?= htmlspecialchars($dept_name) ?> (<?= htmlspecialchars($dept_code) ?>)</option>
                     <?php 
                         endforeach;
-                    else:
+                    endif; 
                     ?>
-                        <option value="">No departments available</option>
-                    <?php endif; ?>
                 </select>
                 <?php endif; ?>
                 <select name="year" class="filter-select" onchange="this.form.submit()">
@@ -403,19 +541,32 @@ $pageTitle = "Librarian Dashboard";
         <div class="archived-section">
             <h3><i class="fas fa-archive"></i> Archived Theses <span class="archived-stats">(<?= count($archived_theses) ?> found)</span></h3>
             <?php if (empty($archived_theses)): ?>
-                <div class="empty-state"><i class="fas fa-archive"></i><p>No archived theses found</p><?php if (!empty($selected_department_code) || !empty($selected_year)): ?><p style="margin-top: 10px;"><a href="librarian_dashboard.php" style="color: #dc2626;">Clear filters</a> to see all archives</p><?php endif; ?></div>
+                <div class="empty-state">
+                    <i class="fas fa-archive"></i>
+                    <p>No archived theses found</p>
+                    <?php if (!empty($selected_department_code) || !empty($selected_year)): ?>
+                        <p style="margin-top: 10px;"><a href="librarian_dashboard.php" style="color: #dc2626;">Clear filters</a> to see all archives</p>
+                    <?php endif; ?>
+                </div>
             <?php else: ?>
                 <div class="table-responsive">
                     <table class="theses-table">
                         <thead>
-                            <tr><th>Thesis Title</th><th>Author</th><th>Department</th><th>Archived Date</th><th>Status</th><th>Action</th></tr>
+                            <tr>
+                                <th>Thesis Title</th>
+                                <th>Author</th>
+                                <th>Department</th>
+                                <th>Archived Date</th>
+                                <th>Status</th>
+                                <th>Action</th>
+                            </tr>
                         </thead>
                         <tbody>
                             <?php foreach ($archived_theses as $thesis): ?>
                             <tr>
                                 <td><strong><?= htmlspecialchars($thesis['title']) ?></strong></td>
                                 <td><?= htmlspecialchars($thesis['first_name'] . ' ' . $thesis['last_name']) ?></td>
-                                <td><?= htmlspecialchars($thesis['department_name'] ?? 'N/A') ?> (<?= htmlspecialchars($thesis['department_code'] ?? 'N/A') ?>)</span></td>
+                                <td><?= htmlspecialchars($thesis['department_name'] ?? 'N/A') ?> (<?= htmlspecialchars($thesis['department_code'] ?? 'N/A') ?>)</td>
                                 <td><?= isset($thesis['archived_date']) ? date('M d, Y', strtotime($thesis['archived_date'])) : date('M d, Y', strtotime($thesis['date_submitted'])) ?></td>
                                 <td><span class="status-badge"><i class="fas fa-check-circle"></i> Archived</span></td>
                                 <td><a href="view_thesis.php?id=<?= $thesis['thesis_id'] ?>" class="btn-view"><i class="fas fa-eye"></i> View</a></td>
@@ -428,9 +579,13 @@ $pageTitle = "Librarian Dashboard";
         </div>
     </main>
 
+    <!-- Archive Modal -->
     <div id="archiveModal" class="modal">
         <div class="modal-content">
-            <div class="modal-header"><h3><i class="fas fa-archive"></i> Archive Thesis</h3><span class="close-modal" onclick="closeArchiveModal()">&times;</span></div>
+            <div class="modal-header">
+                <h3><i class="fas fa-archive"></i> Archive Thesis</h3>
+                <span class="close-modal" onclick="closeArchiveModal()">&times;</span>
+            </div>
             <div class="modal-body">
                 <input type="hidden" id="archive_thesis_id" value="">
                 <div class="form-group">
@@ -454,13 +609,84 @@ $pageTitle = "Librarian Dashboard";
     </div>
 
     <script>
-        window.userData = {
-            fullName: '<?php echo addslashes($fullName); ?>',
-            initials: '<?php echo addslashes($initials); ?>',
-            notificationCount: <?php echo $notificationCount; ?>,
-            librarianDepartmentId: <?php echo $librarian_department_id ? $librarian_department_id : 'null'; ?>
-        };
+        // Sidebar toggle
+        const hamburgerBtn = document.getElementById('hamburgerBtn');
+        const sidebar = document.getElementById('sidebar');
+        const sidebarOverlay = document.getElementById('sidebarOverlay');
         
+        function toggleSidebar() {
+            sidebar.classList.toggle('open');
+            sidebarOverlay.classList.toggle('show');
+            if (sidebar.classList.contains('open')) {
+                document.body.style.overflow = 'hidden';
+            } else {
+                document.body.style.overflow = '';
+            }
+        }
+        
+        if (hamburgerBtn) {
+            hamburgerBtn.addEventListener('click', toggleSidebar);
+        }
+        
+        if (sidebarOverlay) {
+            sidebarOverlay.addEventListener('click', toggleSidebar);
+        }
+        
+        // Close sidebar on escape key
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                if (sidebar.classList.contains('open')) toggleSidebar();
+                if (notificationDropdown) notificationDropdown.classList.remove('show');
+                if (archiveModal) closeArchiveModal();
+            }
+        });
+        
+        // Notification dropdown
+        const notificationIcon = document.getElementById('notificationIcon');
+        const notificationDropdown = document.getElementById('notificationDropdown');
+        
+        if (notificationIcon) {
+            notificationIcon.addEventListener('click', function(e) {
+                e.stopPropagation();
+                notificationDropdown.classList.toggle('show');
+            });
+        }
+        
+        // Close notification dropdown when clicking outside
+        document.addEventListener('click', function() {
+            if (notificationDropdown) {
+                notificationDropdown.classList.remove('show');
+            }
+        });
+        
+        if (notificationDropdown) {
+            notificationDropdown.addEventListener('click', function(e) {
+                e.stopPropagation();
+            });
+        }
+        
+        // Mark all as read
+        const markAllReadBtn = document.getElementById('markAllReadBtn');
+        if (markAllReadBtn) {
+            markAllReadBtn.addEventListener('click', function() {
+                fetch(window.location.href, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: 'mark_all_read=1'
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        location.reload();
+                    }
+                })
+                .catch(error => console.error('Error:', error));
+            });
+        }
+        
+        // Archive functions
         function openArchiveModal(thesisId) {
             document.getElementById('archive_thesis_id').value = thesisId;
             document.getElementById('archiveModal').classList.add('show');
@@ -519,6 +745,25 @@ $pageTitle = "Librarian Dashboard";
             if (event.target == modal) {
                 closeArchiveModal();
             }
+        }
+        
+        // Dark mode
+        const darkModeToggle = document.getElementById('darkmode');
+        if (darkModeToggle) {
+            if (localStorage.getItem('darkMode') === 'true') {
+                document.body.classList.add('dark-mode');
+                darkModeToggle.checked = true;
+            }
+            
+            darkModeToggle.addEventListener('change', function() {
+                if (this.checked) {
+                    document.body.classList.add('dark-mode');
+                    localStorage.setItem('darkMode', 'true');
+                } else {
+                    document.body.classList.remove('dark-mode');
+                    localStorage.setItem('darkMode', 'false');
+                }
+            });
         }
     </script>
     
