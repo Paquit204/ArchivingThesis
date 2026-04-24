@@ -46,23 +46,6 @@ function notifyCoordinator($conn, $thesis_id, $thesis_title, $student_name, $fac
     return $notified;
 }
 
-// HANDLE ARCHIVE REQUEST
-if(isset($_POST['archive_thesis'])) {
-    $archive_thesis_id = $_POST['thesis_id'];
-    $notes = $_POST['archive_notes'] ?? '';
-    $retention = $_POST['retention_period'] ?? 5;
-    
-    if($archive->archiveThesis($archive_thesis_id, $_SESSION['user_id'], $notes, $retention)) {
-        $_SESSION['success_message'] = "Thesis archived successfully!";
-        header("Location: reviewThesis.php?id=" . $archive_thesis_id);
-        exit();
-    } else {
-        $_SESSION['error_message'] = implode("<br>", $archive->getErrors());
-        header("Location: reviewThesis.php?id=" . $archive_thesis_id);
-        exit();
-    }
-}
-
 if ($thesis_id == 0) {
     header("Location: facultyDashboard.php");
     exit;
@@ -321,7 +304,6 @@ $pageTitle = "Review Thesis";
                 <button class="btn btn-approve" onclick="showApproveModal()"><i class="fas fa-check-circle"></i> APPROVE & FORWARD</button>
                 <button class="btn btn-revise" onclick="showReviseModal()"><i class="fas fa-edit"></i> REQUEST REVISION</button>
                 <button class="btn btn-reject" onclick="showRejectModal()"><i class="fas fa-times-circle"></i> REJECT THESIS</button>
-                <button class="btn btn-archive" onclick="openArchiveModal(<?= $thesis_id ?>)"><i class="fas fa-archive"></i> ARCHIVE THESIS</button>
             </div>
             <?php elseif ($is_archived == 1): ?>
             <div class="action-buttons"><div style="background:#e2e3e5; padding:1rem; border-radius:8px; width:100%;"><i class="fas fa-archive"></i> This thesis has been archived.</div></div>
@@ -338,9 +320,6 @@ $pageTitle = "Review Thesis";
 
 <!-- Reject Modal -->
 <div id="rejectModal" class="modal"><div class="modal-content"><h3 style="color:#dc3545;"><i class="fas fa-times-circle"></i> Reject Thesis</h3><p>Are you sure you want to reject this thesis?</p><form method="POST"><input type="hidden" name="reject_thesis" value="1"><textarea name="feedback" rows="3" placeholder="Feedback for the student..." required></textarea><div class="modal-buttons"><button type="button" class="btn" style="background:#6c757d; color:white;" onclick="closeRejectModal()">Cancel</button><button type="submit" class="btn btn-reject">Confirm Reject</button></div></form></div></div>
-
-<!-- Archive Modal -->
-<div id="archiveModal" class="modal"><div class="modal-content"><h3><i class="fas fa-archive"></i> Archive Thesis</h3><form method="POST"><input type="hidden" name="thesis_id" id="archive_thesis_id" value="<?= $thesis_id ?>"><div class="form-group"><label>Retention Period:</label><select name="retention_period"><option value="5">5 years</option><option value="10">10 years</option><option value="20">20 years</option></select></div><div class="form-group"><label>Notes:</label><textarea name="archive_notes" rows="3" placeholder="Optional notes..."></textarea></div><div class="modal-buttons"><button type="button" class="btn" style="background:#6c757d; color:white;" onclick="closeArchiveModal()">Cancel</button><button type="submit" name="archive_thesis" class="btn btn-archive">Archive</button></div></form></div></div>
 
 <script>
     window.userData = {
